@@ -139,6 +139,59 @@ def needs_translation(text) -> bool:
                ("hangul", "cyrillic", "greek", "hebrew", "arabic", "devanagari", "thai"))
 
 
+# ---- mojibake ---------------------------------------------------------------
+# UTF-8 read as a single-byte charset: 'çš„' (cp1252) or 'çڑ"' (cp1256) for 的.
+def _byte_map(enc: str) -> dict:
+    m = {chr(b): b for b in range(0x80, 0xA0)}          # holes come through as C1 controls
+    for b in range(0x80, 0x100):
+        try:
+            m[bytes([b]).decode(enc)] = b
+        except UnicodeDecodeError:
+            pass
+    return m
+
+
+_MOJI = {}
+for _enc in ("cp1252", "cp1256"):
+    _m = _byte_map(_enc)
+    _MOJI[_enc] = (_m, re.compile("[" + re.escape("".join(_m)) + "]+"))
+_LEAD, _CONT = range(0xC2, 0xF5), range(0x80, 0xC0)
+_REPEAT = re.compile(r"(.{1,12}?)\1{9,}", re.S)
+
+
+def fix_mojibake(text: str) -> str:
+    """Repair each mojibake run in place; text around it is left alone."""
+    if not text or text.isascii():
+        return text
+    for enc, (m, run) in _MOJI.items():
+        def fix(mo, m=m, enc=enc):
+            try:
+                out = bytes(m[c] for c in mo.group()).decode("utf-8")
+            except UnicodeDecodeError:
+                return mo.group()
+            # cp1256 also covers real Arabic: only accept a repair into CJK-range text.
+            return out if enc == "cp1252" or max(map(ord, out)) >= 0x800 else mo.group()
+        text = run.sub(fix, text)
+    return text
+
+
+def garbled(text: str) -> bool:
+    """Unrepaired mojibake, replacement characters, or a degenerate loop
+    (machine translation of garbage repeats one phrase dozens of times)."""
+    if not text:
+        return False
+    chars = max(1, sum(not c.isspace() for c in text))
+    if text.count("\ufffd") / chars > 0.02:
+        return True
+    def pairs(m, run):           # UTF-8 lead byte followed by a continuation byte
+        return sum(x in _LEAD and y in _CONT for mo in run.finditer(text)
+                   for b in [[m[c] for c in mo.group()]] for x, y in zip(b, b[1:]))
+    if max(pairs(m, run) for m, run in _MOJI.values()) * 2 / chars > 0.05:
+        return True
+    return any(len(mo.group()) >= 40 and re.search(r"\w", mo.group(1))
+               for mo in _REPEAT.finditer(text))
+
+
 # ---- translation ------------------------------------------------------------
 GTX = "https://translate.googleapis.com/translate_a/single"
 GTX_CHUNK_BYTES = 2000       # q is in the query string: limit *encoded* bytes
@@ -251,6 +304,18 @@ def deepl_usage(session):
         return None
 
 
+def _accept(out: str) -> tuple:
+    """A translation is usable only if it is Chinese and not garbage."""
+    out = (out or "").strip()
+    if not out:
+        return None, "empty result"
+    if garbled(out):
+        return None, "garbled result"
+    if needs_translation(out):
+        return None, "result still not Chinese"
+    return out, ""
+
+
 def translate_many(texts: list[str], session, stop_after: int = 0) -> list[tuple]:
     """[(translation | None, reason)] aligned with `texts`, into 繁體中文.
 
@@ -260,6 +325,9 @@ def translate_many(texts: list[str], session, stop_after: int = 0) -> list[tuple
     global deepl_on
     res = [(None, "empty input")] * len(texts)
     todo = [i for i, t in enumerate(texts) if (t or "").strip()]
+    for i in [i for i in todo if garbled(texts[i])]:     # never pay to translate garbage
+        res[i] = (None, "garbled input")
+        todo.remove(i)
     streak = 0
     while todo:
         batch, chars = [], 0
@@ -270,7 +338,7 @@ def translate_many(texts: list[str], session, stop_after: int = 0) -> list[tuple
         if deepl_on:
             try:
                 for i, o in zip(batch, _deepl([texts[i].strip() for i in batch], session)):
-                    res[i] = (o.strip() or None, "" if o.strip() else "empty result")
+                    res[i] = _accept(o)
                 PROVIDERS["deepl"] += len(batch)
                 continue
             except TranslateError as e:
@@ -282,8 +350,7 @@ def translate_many(texts: list[str], session, stop_after: int = 0) -> list[tuple
                 res[i] = (None, "skipped: gtx refusing this run")
                 continue
             try:
-                out = _gtx(texts[i], session)
-                res[i] = (out or None, "" if out else "empty result")
+                res[i] = _accept(_gtx(texts[i], session))
             except TranslateError as e:
                 res[i] = (None, str(e))
             if res[i][0]:

@@ -6,6 +6,7 @@ and is not metered; page fetches are capped by --max-items. Pass 3 (backfill)
 re-validates thumbnails, converts 簡體, and translates non-Chinese summaries.
 
     summarize_feed.py                       # normal run (env: ITEMS_FILE, MAX_ITEMS...)
+    summarize_feed.py --offline-only          # feed copies + local subtitles only, no fetches (after download_sub)
     summarize_feed.py --backfill-only [--dry-run] [--limit N] [--no-translate]
     summarize_feed.py --mine-boilerplate N  # candidate drop_unit rules from corpus
 """
@@ -39,16 +40,18 @@ PAUSE_DOMAINS = ("douban.com",)        # same skeleton page on every subdomain
 TECHMEME_FETCH = ("Source", "Report", "Documents:")
 # Summarised from the feed copy without fetching the page, when one exists.
 FEED_FIRST_HOSTS = tuple("""
-ageofinvention.xyz artincontext.org
-blocktempo.com blogspot.com buttondown.com cashchou.com
-chaidarun.com davidoks.blog
-devtang.com firstround.com fomosoc.com fs.blog
-honest-broker.com huli.tw hunterwalk.com joestudwell.com kopu.chat
-lipperalpha.refinitiv.com matters.town
-medium.com meiguinfo.com notesbylex.com personaljournal.ca polgeonow.com
-readtrung.com ruanyifeng.com samaltman.com
-starrocket.io steveblank.com substack.com
-unchartedterritories.tomaspueyo.com vox.com waitbutwhy.com
+abei.club aftermath.site ageofinvention.xyz artincontext.org attlin.com beartalking.com
+bituzi.com blocktempo.com blogspot.com buttondown.com caffes.me careher.net cashchou.com
+chaidarun.com cityofsound.com cocktail4party.com coolshell.cn curtismchale.ca davidoks.blog
+devtang.com esence.travel first-cafe.com firstround.com fomosoc.com fs.blog gilifedesigner.com
+honest-broker.com huli.tw hunterwalk.com joestudwell.com kopu.chat limboy.me
+lipperalpha.refinitiv.com lostmagazine.org louie.lu lutaonan.com matters.town maxjamesread.com
+medium.com meiguinfo.com mickzh.com noswag.tw notesbylex.com personaljournal.ca polgeonow.com
+pseudoyu.com readtrung.com ruanyifeng.com samaltman.com shenlvmeng.github.com shiuncorner.com
+sirupsen.com sive.rs smallbooks.com.tw soidid.tw starrocket.io steveblank.com substack.com
+techcabal.com tiaodao.typlog.io travelwithbook.com trensse.com
+unchartedterritories.tomaspueyo.com uselessetymology.com vox.com waitbutwhy.com werner.wiki
+whogovernstw.org yuanyu.idv.tw zmonster.me bestblogs.dev
 """.split())
 
 
@@ -116,10 +119,10 @@ class Run:
             return "blank"
         return "techmeme" if "techmeme.com" in url else "fetch"
 
-    def process(self, pending: list):
+    def process(self, pending: list, offline_only=False):
         routed = [(r, it) for it in pending if (r := self.route(it))]
         offline = [x for x in routed if x[0] in ("feed", "youtube", "blank")]
-        online = [x for x in routed if x[0] not in ("feed", "youtube", "blank")]
+        online = [] if offline_only else [x for x in routed if x[0] not in ("feed", "youtube", "blank")]
         print(f"pending={len(pending)}: offline={len(offline)} network={len(online)} "
               f"(fetch cap {self.max_items})")
         for r, it in offline + online:
@@ -162,6 +165,10 @@ class Run:
         s = textproc.build(text, "feed", meta=len(text) < extract.MIN_BODY)
         if s:
             self.done(it, s, f"feed, {len(text)} chars")
+        elif s is None:             # undecodable feed copy: drop it, the page gets fetched next run
+            it.pop("feed_content", None)
+            self.n["failed"] += 1
+            self.touch()
         else:                       # feed copy held only boilerplate / images: nothing to say
             self.done(it, BLANK_SUMMARY, "only boilerplate in feed copy, blank")
 
@@ -205,7 +212,7 @@ class Run:
             return self.done(it, s, f"{f.kind}, {len(f.text)} chars")
         if fallback and fallback(it):
             return
-        if f.text and f.kind in ("body", "meta"):    # page read fine, but only boilerplate in it
+        if f.text and s is not None and f.kind in ("body", "meta"):    # page read fine, but only boilerplate in it
             return self.done(it, BLANK_SUMMARY, f"{f.kind}: only boilerplate, blank")
         if f.kind == "blocked":              # site-wide refusal: pause host, stay pending
             self.paused.setdefault(key, 0)
@@ -235,6 +242,10 @@ def backfill(items, *, translate=True, deadline=None, save=None, limit=0) -> Cou
         s = it.get("summary")
         if not s or not s.strip() or s == GONE_SUMMARY:
             continue
+        if lang.garbled(s):                     # stored mojibake / translated garbage
+            del it["summary"]                   # pending again: re-fetched with the fixed decoder
+            n["garbled"] += 1
+            continue
         if (t := textproc.restrip(s)) != s:              # rules added since it was written
             it["summary"] = s = t
             n["boilerplate"] += 1
@@ -247,7 +258,7 @@ def backfill(items, *, translate=True, deadline=None, save=None, limit=0) -> Cou
             targets.append(it)
     targets = targets[:limit] if limit else targets
     print(f"Backfill: thumbnails dropped={n['thumbnail']}, boilerplate={n['boilerplate']}, "
-          f"simplified={n['simplified']}, "
+          f"simplified={n['simplified']}, garbled reset={n['garbled']}, "
           f"non-Chinese={len(targets)}"
           + "".join(f"\n  {k}×{v}" for k, v in n.items() if k.startswith("thumb: ")))
     if not (targets and translate):
@@ -264,8 +275,6 @@ def backfill(items, *, translate=True, deadline=None, save=None, limit=0) -> Cou
         bodies = [it["summary"].rstrip().rstrip(FALLBACK_MARK).strip() for it in batch]
         for it, mark, (out, why) in zip(batch, marks, lang.translate_many(
                 bodies, extract.session, stop_after=MAX_FAIL_STREAK - streak)):
-            if out and lang.needs_translation(out):
-                out, why = None, "result still not Chinese"
             if out:
                 it["summary"] = (lang.to_twp(out) + " " + mark).rstrip()
                 n["translated"] += 1
@@ -314,6 +323,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-translate", dest="translate", action="store_false", default=textproc.TRANSLATE)
     ap.add_argument("--no-backfill", dest="backfill", action="store_false")
     ap.add_argument("--backfill-only", action="store_true")
+    ap.add_argument("--offline-only", action="store_true",
+                    help="no page fetches, no backfill")
     ap.add_argument("--dry-run", action="store_true", help="with --backfill-only: report only")
     ap.add_argument("--limit", type=int, default=0, help="with --backfill-only: translate at most N")
     ap.add_argument("--mine-boilerplate", type=int, default=0, metavar="MIN_COUNT")
@@ -346,11 +357,11 @@ def main(argv=None) -> int:
     pending = sorted(filter(is_pending, items), key=lambda it: _ts(it.get("published_at")), reverse=True)
     run = Run(a.items_file, doc, a.max_items, start + budget * 0.5 if budget else None)
     try:
-        run.process(pending)
+        run.process(pending, offline_only=a.offline_only)
         print(f"Done. {dict(run.n)}; paused hosts: {dict(run.paused) or '-'}")
         if textproc.STATS:
             print("Stats: " + ", ".join(f"{k}×{v}" for k, v in sorted(textproc.STATS.items())))
-        if a.backfill:
+        if a.backfill and not a.offline_only:
             try:
                 backfill(items, translate=a.translate,
                          deadline=start + budget if budget else None, save=save)

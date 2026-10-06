@@ -227,6 +227,90 @@ def check_text():
        "でも人がすごく多くて、並ぶのに一時間かかりました。", "Japanese caption regrouping")
 
 
+def check_encoding():
+    """2026-10: a Chinese page with no charset header was guessed as cp1256
+    from a truncated prefix; the mojibake was then 'translated' into nonsense
+    and stored as its summary."""
+    zh = "考古學家發現一座擁有兩百年歷史的古墓。" * 4
+    page = ("<script>" + "x" * 250_000 + "</script><p>" + zh + "</p>").encode()
+    eq(zh in common.decode_body(page, {}), True, "utf-8 past a long ascii prefix")
+    eq(zh in common.decode_body(page, {"content-type": "text/html; charset=windows-1256"}), True,
+       "valid utf-8 beats a wrong label")
+    eq(common.decode_body(zh.encode("big5"), {"Content-Type": "text/html; charset=ISO-8859-1"}), zh,
+       "big5 behind a default latin-1 header")
+    fr = "café déjà vu, très bien. " * 10
+    eq(common.decode_body(fr.encode("cp1252"), {"Content-Type": "text/html; charset=iso-8859-1"}), fr,
+       "real latin-1 page keeps its label")
+    for enc in ("cp1252", "cp1256"):
+        bad = "".join(bytes([b]).decode(enc, "ignore") or chr(b) for b in zh.encode())
+        eq(lang.fix_mojibake("前言 " + bad + " café"), "前言 " + zh + " café", f"repair {enc} runs in place")
+        eq(lang.garbled(bad), True, f"detect {enc} mojibake")
+    for ok in (zh, fr, "مرحبا بالعالم هذا نص عربي حقيقي", "哈哈哈哈哈哈，Straße Ñandú"):
+        eq((lang.garbled(ok), lang.fix_mojibake(ok)), (False, ok), f"clean text untouched: {ok[:8]}")
+    eq(lang.garbled("前言。" + "考查，" * 30), True, "degenerate translation loop")
+    eq(lang._accept("考查，" * 30)[0], None, "garbled translation rejected")
+    eq(textproc.build("é¦é¦é¦é¦çڑ„ه°±و˜¯" * 30), None, "mojibake never becomes a summary")
+    import summarize_feed as sf
+    items = [{"url": "https://x.example/a", "summary": "çڑ„ه°±و˜¯é¦é¦é¦é¦" * 5},
+             {"url": "https://x.example/b", "summary": "正常的中文摘要。"}]
+    sf.backfill(items, translate=False)
+    eq(["summary" in it for it in items], [False, True], "backfill re-queues stored mojibake")
+
+
+def check_inbox():
+    """data/inbox.json from the reader: only safe recent urls; a known url
+    keeps its title (the id hashes it) and is not fetched again."""
+    now = datetime.now(timezone.utc)
+    d = Path(tempfile.mkdtemp())
+    add = lambda u, days=0: {"url": u, "added": (now - timedelta(days=days)).isoformat()}
+    (d / "inbox.json").write_text(json.dumps({"urls": [
+        add("https://example.org/p"), add("https://example.org/p"), add("javascript:alert(1)"),
+        add("https://u:p@x.org/"), add("https://old.org/", 99), add("https://plain.org/a/")]}))
+
+    class R:
+        status, text = 200, "<head><meta property='og:title' content='Hello 世界'><title>x</title></head>"
+    real = un.common.get
+    try:
+        un.common.get = lambda url, *a, **k: R() if "example" in url else None
+        archive = {}
+        raws = un.fetch_inbox(archive, d / "inbox.json", 60)
+        eq([(r.title, r.url) for r in raws], [("Hello 世界", "https://example.org/p"), ("plain.org/a", "https://plain.org/a/")],
+           "inbox: filtered, deduped, titled")
+        un.ingest(archive, raws, now)
+        ids = set(archive)
+        un.common.get = lambda *a, **k: (_ for _ in ()).throw(AssertionError("refetched"))
+        un.ingest(archive, un.fetch_inbox(archive, d / "inbox.json", 60), now)
+        eq(set(archive), ids, "inbox: known url keeps its id, no refetch")
+        (d / "inbox.json").write_text("[]")
+        eq(un.fetch_inbox(archive, d / "inbox.json", 60), [], "inbox: malformed file ignored")
+    finally:
+        un.common.get = real
+
+
+def check_offline_only():
+    """download_sub's run summarizes fresh subtitles without fetching pages."""
+    import summarize_feed as sf
+    d = Path(tempfile.mkdtemp())
+    yid = "a" * 40
+    (d / f"{yid}.zh-TW.zh-TW.vtt").write_text("WEBVTT\n\n00:00:01.000 --> 00:00:05.000\n"
+        + "這是一段關於考古發現的影片內容，研究人員在烏克蘭南部發掘古墓。" * 20 + "\n", encoding="utf-8")
+    f = d / "a.json"
+    f.write_text(json.dumps({"items": [
+        {"id": yid, "url": "https://www.youtube.com/watch?v=abcdefghijk", "title": "v", "source": "y", "category": "x"},
+        {"id": "b" * 40, "url": "https://example.org/x", "title": "p", "source": "s", "category": "x", "feed_content": "keep"}]}))
+    real_dir, real_fetch = sf.SUBTITLES_DIR, extract.fetch
+    sf.SUBTITLES_DIR = d
+    extract.fetch = lambda *a, **k: (_ for _ in ()).throw(AssertionError("network"))
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            sf.main(["--items-file", str(f), "--offline-only", "--no-translate"])
+    finally:
+        sf.SUBTITLES_DIR, extract.fetch = real_dir, real_fetch
+    out = json.loads(f.read_text())["items"]
+    eq((bool(out[0].get("summary")), "summary" in out[1], out[1].get("feed_content")), (True, False, None),
+       "offline-only: subtitle summarized, page not fetched, feed copy dropped")
+
+
 def check_security():
     for u in ("http://169.254.169.254/latest/meta-data", "http://127.0.0.1:4416/", "http://localhost/",
               "http://10.1.2.3/", "http://[::1]/", "http://[::ffff:127.0.0.1]/", "http://0.0.0.0/",
@@ -234,6 +318,22 @@ def check_security():
         eq(common.safe_url(u), False, f"refuse {u}")
         eq(common.get(u, 1), None, f"never fetched: {u}")
     eq(common.safe_url("https://1.1.1.1/"), True, "public address allowed")
+    import socket
+    real, answers, dialed = socket.getaddrinfo, iter(["1.1.1.1", "127.0.0.1"]), []
+
+    def rebinding(host, *a, **k):          # passes the check once, then answers loopback
+        return real(next(answers) if host == "rebind.test" else host, *a, **k)
+    plain, socket.getaddrinfo = common._plain_connect, rebinding
+    common._plain_connect = lambda addr, *a, **k: dialed.append(addr[0]) or (_ for _ in ()).throw(OSError())
+    tok = common._GUARD.set(True)
+    try:
+        common._guarded_connect(("rebind.test", 80), 1)
+    except OSError:
+        pass
+    finally:
+        common._GUARD.reset(tok)
+        socket.getaddrinfo, common._plain_connect = real, plain
+    eq(dialed, ["1.1.1.1"], "DNS rebinding: connect only to the address that was checked")
     eq([common.valid_id(x) for x in ("a" * 40, "../" + "a" * 37, "A" * 40, None)],
        [True, False, False, False], "item ids are sha1 hex only")
     eq([common.safe_lang(x) for x in ("zh-Hant", "en", "../../x", "", ".*", None)],
@@ -303,11 +403,19 @@ def check_merge_and_id():
             {"id": "a" * 40, "title": "old", "url": "https://x.example/1", "last_seen_at": ago(61)},
             {"id": "b" * 40, "title": "new", "url": "https://x.example/2", "last_seen_at": ago(59)},
             {"id": "c" * 40, "title": "legacy", "url": "https://x.example/3", "published_at": ago(10)}]})
-        un.main(["--output-dir", d])
-        kept = lambda: sorted(r["title"] for r in common.load_doc(Path(d) / "archive.json")["items"])
-        eq(kept(), ["legacy", "new"], "default retention: 60 days of last_seen_at")
-        un.main(["--output-dir", d, "--archive-days", "5"])
-        eq(kept(), [], "retention days configurable")
+        # main() also scrapes BestBlogs: on a runner with network that adds live
+        # issues to the archive. The test is about retention only, so stay offline.
+        real_bb, un.fetch_bestblogs = un.fetch_bestblogs, lambda archive: []
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                un.main(["--output-dir", d])
+            kept = lambda: sorted(r["title"] for r in common.load_doc(Path(d) / "archive.json")["items"])
+            eq(kept(), ["legacy", "new"], "default retention: 60 days of last_seen_at")
+            with contextlib.redirect_stdout(io.StringIO()):
+                un.main(["--output-dir", d, "--archive-days", "5"])
+            eq(kept(), [], "retention days configurable")
+        finally:
+            un.fetch_bestblogs = real_bb
 
 
 if __name__ == "__main__":

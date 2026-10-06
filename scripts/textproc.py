@@ -380,12 +380,18 @@ def translate(text: str) -> str | None:
     return out
 
 
-def build(content: str, kind: str = "page", table=False, code=False, meta=False) -> str:
+def build(content: str, kind: str = "page", table=False, code=False, meta=False) -> str | None:
     """Extractive summary of `content`, in 繁中, plus trailing marks.
 
     kind: page | feed | subtitle | bridge (selects boilerplate scope);
     meta: only a blurb was available (marked ↛).
+    Returns "" when only boilerplate remains, None when the text is
+    undecodable (mojibake): that is a fetch problem, so the item stays pending.
     """
+    content = lang.fix_mojibake(content)
+    if lang.garbled(content):
+        STATS["garbled"] += 1
+        return None
     content = re.sub(r"\((?:\d{1,2}:)?\d{1,2}:\d{2}\)\s*[:：]?", ": ", content)
     content = strip_boilerplate(content)
     if not content:

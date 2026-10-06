@@ -23,8 +23,9 @@ from common import BLANK_SUMMARY, is_youtube, load_doc, safe_lang, save_doc, val
 from subtitle_priority import choose_track, track_rank
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-BASE_ARGS = ["--user-agent", UA, "--remote-components", "ejs:github",
-             "--no-progress", "--socket-timeout", "30"]
+# The JS challenge solver comes from the pinned yt-dlp-ejs package (yt-dlp[default]);
+# `--remote-components ejs:github` would run unpinned code fetched at runtime.
+BASE_ARGS = ["--user-agent", UA, "--no-progress", "--socket-timeout", "30"]
 SUB_ARGS = ["--extractor-args", "youtube:player_client=web", "--ignore-no-formats"]
 AUDIO_ARGS = ["--extractor-args", "youtube:player_client=tv,web_safari,default",
               "-f", "bestaudio[abr<=64]/bestaudio/bestaudio*/best"]
@@ -59,6 +60,12 @@ def run(cmd: list[str], timeout: float) -> tuple[int | None, str, str]:
 def ytdlp(cookies: Path, url: str, *args) -> list[str]:
     """`--` ends option parsing: a url can never be read as a flag."""
     return ["yt-dlp", "--cookies", str(cookies), *BASE_ARGS, *args, "--", url]
+
+
+def cookies_rejected(stderr: str) -> bool:
+    """Only yt-dlp's own diagnostics: stdout carries remote metadata, and a
+    video titled "cookies" must not end the run."""
+    return "cookies" in (stderr or "").lower()
 
 
 def discard(out_dir: Path, item_id: str) -> list[str]:
@@ -237,7 +244,7 @@ def main(argv=None) -> int:
         n["processed"] += 1
         rc, out, err = run(ytdlp(cookies, url, *SUB_ARGS, "--skip-download", "--dump-json"),
                            a.probe_timeout)
-        if "cookies" in (out + err).lower():
+        if cookies_rejected(err):
             print("[EXPIRED] cookies invalid")
             break
         try:
@@ -273,10 +280,11 @@ def main(argv=None) -> int:
                                      "--write-sub" if manual else "--write-auto-sub",
                                      "--sub-langs", lang, "--sub-format", "vtt",
                                      "--sleep-interval", "4", "--max-sleep-interval", "7",
-                                     "-o", str(out_dir / f"{item_id}.%(language)s.%(ext)s")),
+                                     # no remote field in the filename: orig is safe_lang'd
+                                     "-o", str(out_dir / f"{item_id}.{orig or 'und'}.%(ext)s")),
                                a.download_timeout)
             log = (out + err).lower()
-            if "cookies" in log:
+            if cookies_rejected(err):
                 print("[EXPIRED] cookies invalid")
                 break
             if rc is None:

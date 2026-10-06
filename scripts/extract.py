@@ -16,6 +16,7 @@ import thumbs
 from urllib.parse import quote
 
 import common
+import lang
 from common import UA, host_in, make_session
 
 TIMEOUT, TIMEOUT_SLOW = 30, 60
@@ -72,21 +73,6 @@ class Fetched(NamedTuple):
 
 def unescape(text: str) -> str:
     return html_mod.unescape(text or "").replace("\u00a0", " ").replace("\u200b", "")
-
-
-def fix_mojibake(text: str) -> str:
-    """UTF-8 bytes that were decoded as Latin-1/CP1252."""
-    s = (text or "").strip()
-    if not re.search(r"[Ãâåèæïð\x80-\x9f]|æ|ç|å|é", s):
-        return s
-    for enc in ("latin1", "cp1252"):
-        try:
-            fixed = s.encode(enc).decode("utf-8")
-            if fixed != s:
-                return fixed
-        except Exception:
-            pass
-    return s
 
 
 _LEAK = [(re.compile(p, f), r) for p, f, r in (
@@ -227,12 +213,15 @@ def from_html(html: str) -> tuple[str, str, bool, bool]:
     html, code = strip_code(html)
     body = trafilatura.extract(html, include_comments=False, include_tables=False,
                                favor_recall=True) or ""
-    body = fix_mojibake(unescape(body))
+    body = lang.fix_mojibake(unescape(body))
     if len(body) < MIN_BODY:
-        alt = unescape(_bs4_text(html))
+        alt = lang.fix_mojibake(unescape(_bs4_text(html)))
         if len(alt) > len(body):
             body = alt
-    return body, fix_mojibake(unescape(meta_description(html))), table, code
+    meta = lang.fix_mojibake(unescape(meta_description(html)))
+    # Text that is still mojibake is not content: drop it so the next
+    # strategy (reader proxy, Wayback) gets a chance.
+    return ("" if lang.garbled(body) else body), ("" if lang.garbled(meta) else meta), table, code
 
 
 def classify(body: str, meta: str, table: bool, code: bool) -> Fetched:
@@ -265,11 +254,11 @@ def via_reader(url: str) -> str | None:
     text, status = http_get(READER.rstrip("/") + "/" + url, TIMEOUT_SLOW)
     if status != "ok" or not text:
         return None
-    text = fix_mojibake(text)
+    text = lang.fix_mojibake(text)
     if "Markdown Content:" in text[:1000]:           # drop the reader's preamble
         text = text.split("Markdown Content:", 1)[1]
     text = clean_markdown(text)
-    return None if is_junk(text) else text or None
+    return None if is_junk(text) or lang.garbled(text) else text or None
 
 
 def via_wayback(url: str) -> str | None:
@@ -329,7 +318,9 @@ def fetch(url: str, feed_text: str = "", found: dict | None = None) -> Fetched:
         elif html and (res := consider(html)):
             return done(res, "curl_cffi" if imp and not slow else "")
 
-    feed_text = unescape(feed_text).strip()
+    feed_text = lang.fix_mojibake(unescape(feed_text).strip())
+    if lang.garbled(feed_text):
+        feed_text = ""
     if len(feed_text) >= MIN_BODY:
         return done(Fetched(feed_text, "body"), "feed content")
     if best.kind == "meta" and not READER_ON_META:

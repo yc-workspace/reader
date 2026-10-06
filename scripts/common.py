@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import codecs
+import contextlib
+import contextvars
 import ipaddress
 import json
 import os
 import re
 import socket
 import tempfile
-from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urljoin, urlparse
 
 import charset_normalizer
+import urllib3.util.connection
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 try:
-    from curl_cffi import requests as curl_requests
+    from curl_cffi import CurlOpt, requests as curl_requests
 except Exception:                      # optional; comes with yt-dlp[curl-cffi]
     curl_requests = None
 
@@ -129,12 +132,63 @@ def save_doc(path, doc: dict) -> None:
 # ---- HTTP -------------------------------------------------------------------
 # Every url we fetch comes from third-party feeds, and whatever a page returns
 # ends up in a public commit. So: http(s) only, public addresses only (checked
-# again on every redirect hop), bounded body size.
+# at connect time on every redirect hop), no env proxies, bounded body size.
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 IMPERSONATE = os.environ.get("CURL_IMPERSONATE", "chrome")
 MAX_BYTES = 8 * 1024 * 1024
 MAX_REDIRECTS = 5
+
+
+_BOMS = ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"))
+_META_CHARSET = re.compile(rb"""<meta[^>]{0,200}?charset\s*=\s*["']?\s*([\w.:-]{2,40})""", re.I)
+_WEAK = {codecs.lookup(n).name for n in ("latin-1", "ascii", "cp1252")}     # often a server default, not a fact
+_XML_CHARSET = re.compile(rb"""^\s*<\?xml[^>]{0,200}?encoding\s*=\s*["']([\w.:-]{2,40})""", re.I)
+
+
+def _codec(name) -> str | None:
+    try:
+        return codecs.lookup((name.decode("ascii", "ignore") if isinstance(name, bytes) else name)
+                             .strip()).name
+    except (LookupError, AttributeError):
+        return None
+
+
+def decode_body(content: bytes, headers: dict) -> str:
+    """Bytes to text: BOM, valid UTF-8, declared charset (header, then
+    <meta>/<?xml?>), then a guess over the whole body.
+
+    Valid UTF-8 wins over any label: non-ASCII text in another charset is
+    almost never valid UTF-8, while mislabelled UTF-8 pages are common. The
+    old path read the header from a plain dict with a case-sensitive key (so
+    never) and guessed from a truncated 200 KB prefix, which called Chinese
+    pages ascii/cp1256 and stored mojibake."""
+    for bom, enc in _BOMS:
+        if content.startswith(bom):
+            return content[len(bom):].decode(enc, errors="replace")
+    ctype = next((v for k, v in headers.items() if k.lower() == "content-type"), "")
+    m = re.search(r"charset\s*=\s*[\"']?([\w.:-]+)", ctype, re.I)
+    head = content[:4096]
+    declared = [_codec(m.group(1)) if m else None]
+    declared += [_codec(x.group(1)) for x in (_META_CHARSET.search(head), _XML_CHARSET.search(head)) if x]
+    declared = [d for d in declared if d and d != "utf-8"]
+    try:
+        return content.decode("utf-8")      # valid UTF-8 beats any label
+    except UnicodeDecodeError:
+        pass
+    for enc in declared:                    # latin-1/ascii labels decode anything: a guess first
+        if enc not in _WEAK:
+            try:
+                return content.decode(enc)
+            except UnicodeDecodeError:
+                continue
+    best = charset_normalizer.from_bytes(content).best()
+    guess = str(best) if best else None
+    # A multibyte guess (Big5, GBK, Shift_JIS...) overrides a weak label; among
+    # single-byte charsets the label is a better bet than the guess.
+    if guess is not None and (len(guess) < len(content) or not declared):
+        return guess
+    return content.decode(next(iter(declared), "utf-8"), errors="replace")
 
 
 class Resp(NamedTuple):
@@ -145,40 +199,72 @@ class Resp(NamedTuple):
 
     @property
     def text(self) -> str:
-        enc = requests.utils.get_encoding_from_headers(self.headers)
-        if not enc or enc.lower() in ("iso-8859-1", "ascii"):     # header absent or a lie
-            best = charset_normalizer.from_bytes(self.content[:200_000]).best()
-            enc = best.encoding if best else "utf-8"
-        return self.content.decode(enc, errors="replace")
+        return decode_body(self.content, self.headers)
 
 
-@lru_cache(maxsize=4096)
-def _public_host(host: str, port: int) -> bool:
+def public_addrs(host: str, port: int) -> list[str]:
+    """Every address `host` resolves to, IPv4 first, or [] if any is not a
+    public unicast address (one private answer is enough to refuse)."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError:
-        return False
-    for *_, addr in infos:
+    except (OSError, UnicodeError):
+        return []
+    out = []
+    for fam, *_, addr in infos:
         ip = ipaddress.ip_address(addr[0].split("%", 1)[0])
         ip = getattr(ip, "ipv4_mapped", None) or ip
         if not ip.is_global or ip.is_multicast:
-            return False
-    return bool(infos)
+            return []
+        if str(ip) not in out:
+            out.append(str(ip))
+    return sorted(out, key=lambda a: ":" in a)
+
+
+def _target(url: str):
+    """(host, port) of an http(s) url without credentials, else None."""
+    try:
+        p = urlparse(url)
+        if p.scheme in ("http", "https") and p.hostname and not p.username and not p.password:
+            return p.hostname, p.port or (443 if p.scheme == "https" else 80)
+    except ValueError:
+        pass
+    return None
 
 
 def safe_url(url: str) -> bool:
     """http(s) to a host that resolves only to public addresses."""
-    try:
-        p = urlparse(url)
-        return p.scheme in ("http", "https") and bool(p.hostname) and not p.username \
-            and _public_host(p.hostname, p.port or (443 if p.scheme == "https" else 80))
-    except ValueError:
-        return False
+    t = _target(url)
+    return bool(t) and bool(public_addrs(*t))
+
+
+# DNS rebinding: checking a name and then letting the client resolve it again
+# leaves a window in which it can answer 127.0.0.1. Inside get(), every
+# connection urllib3 opens is resolved and checked here and made to exactly
+# the address that passed; curl is pinned with CURLOPT_RESOLVE.
+_GUARD: contextvars.ContextVar[bool] = contextvars.ContextVar("public_only", default=False)
+_plain_connect = urllib3.util.connection.create_connection
+
+
+def _guarded_connect(address, *args, **kw):
+    if not _GUARD.get():
+        return _plain_connect(address, *args, **kw)
+    host, port = address
+    err = OSError(f"refused non-public address for {host}")
+    for ip in public_addrs(host, port):
+        try:
+            return _plain_connect((ip, port), *args, **kw)
+        except OSError as e:
+            err = e
+    raise err
+
+
+urllib3.util.connection.create_connection = _guarded_connect
 
 
 def make_session(retries: int, headers: dict, *, read_retry=True,
                  status=(429, 500, 502, 503, 504), pool=16) -> requests.Session:
     s = requests.Session()
+    s.trust_env = False        # an env proxy would resolve the host itself, past the address check
     retry = Retry(total=retries, connect=retries, redirect=0,
                   read=retries if read_retry else False,
                   status=retries if status else 0, status_forcelist=list(status),
@@ -203,30 +289,55 @@ def _read(r) -> bytes | None:
     return bytes(buf)
 
 
+_default = requests.Session()
+_default.trust_env = False
+
+
+@contextlib.contextmanager
+def _open(url, timeout, session, impersonate, lang):
+    if impersonate:
+        host, port = _target(url)
+        ips = public_addrs(host, port)
+        if not ips:
+            raise OSError("non-public address")
+        pin = [f"{host}:{port}:{','.join(f'[{i}]' if ':' in i else i for i in ips)}"]
+        with curl_requests.Session(curl_options={CurlOpt.RESOLVE: pin}) as cs:
+            r = cs.get(url, timeout=timeout, impersonate=IMPERSONATE, stream=True,
+                       headers={"Accept-Language": lang}, allow_redirects=False)
+            try:
+                yield r
+            finally:
+                r.close()
+            return
+    token = _GUARD.set(True)
+    try:
+        r = (session or _default).get(url, timeout=timeout, stream=True, allow_redirects=False)
+        try:
+            yield r
+        finally:
+            r.close()
+    finally:
+        _GUARD.reset(token)
+
+
 def get(url: str, timeout, session: requests.Session | None = None,
         impersonate=False, lang="en") -> Resp | None:
-    """GET with redirects followed by hand (each hop re-checked), or None when
-    the url is unsafe, the body too large, the transport fails, or (with
-    impersonate) curl_cffi is missing."""
+    """GET with redirects followed by hand (each hop re-checked, each
+    connection pinned to a checked address), or None when the url is unsafe,
+    the body too large, the transport fails, or (with impersonate) curl_cffi
+    is missing."""
     if impersonate and curl_requests is None:
         return None
     for _ in range(MAX_REDIRECTS + 1):
-        if not safe_url(url):
+        if not _target(url):
             return None
         try:
-            if impersonate:
-                r = curl_requests.get(url, timeout=timeout, impersonate=IMPERSONATE, stream=True,
-                                      headers={"Accept-Language": lang}, allow_redirects=False)
-            else:
-                r = (session or requests).get(url, timeout=timeout, stream=True, allow_redirects=False)
-            try:
+            with _open(url, timeout, session, impersonate, lang) as r:
                 if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
                     url = urljoin(url, r.headers["Location"])
                     continue
                 body = _read(r)
                 return None if body is None else Resp(r.status_code, body, dict(r.headers), url)
-            finally:
-                r.close()
         except Exception:
             return None
     return None
