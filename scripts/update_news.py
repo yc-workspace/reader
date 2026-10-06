@@ -220,6 +220,56 @@ def parse_rss(content: bytes, feed: dict) -> list[Raw]:
     return out
 
 
+YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com"}
+YOUTUBE_FEED = "https://www.youtube.com/feeds/videos.xml"
+YT_CHANNEL_ID = re.compile(r"^UC[\w-]{22}$")
+YT_PLAYLIST_ID = re.compile(r"^[\w-]{10,64}$")
+
+
+def youtube_feed_url(page_url: str) -> str | None:
+    """The RSS url for a YouTube channel (/channel/UC...) or playlist (?list=...) page, which needs no
+    network because the id is in the url. None for anything else (including @handle pages)."""
+    u = urlparse(page_url)
+    if u.scheme not in ("http", "https") or u.netloc.lower() not in YOUTUBE_HOSTS:
+        return None
+    parts = [p for p in u.path.split("/") if p]
+    if len(parts) >= 2 and parts[0] == "channel" and YT_CHANNEL_ID.match(parts[1]):
+        return f"{YOUTUBE_FEED}?channel_id={parts[1]}"
+    if parts[:1] == ["playlist"] or parts == []:
+        pl = dict(parse_qsl(u.query)).get("list", "")
+        if YT_PLAYLIST_ID.match(pl):
+            return f"{YOUTUBE_FEED}?playlist_id={pl}"
+    return None
+
+
+def is_youtube_channel_page(url: str) -> bool:
+    """/@handle, /c/name or /user/name: the page has to be fetched to learn the channel id."""
+    u = urlparse(url)
+    if u.scheme not in ("http", "https") or u.netloc.lower() not in YOUTUBE_HOSTS:
+        return False
+    parts = [p for p in u.path.split("/") if p]
+    return bool(parts) and (parts[0].startswith("@") and len(parts[0]) > 1 or parts[0] in ("c", "user") and len(parts) >= 2)
+
+
+def extract_youtube_channel_id(html: str) -> str | None:
+    """The page's own channel id: its RSS <link>, then the canonical <link>, then channel metadata. The
+    page is untrusted input, so only a strictly shaped id is ever returned."""
+    for pattern in (r'<link[^>]+type="application/rss\+xml"[^>]+channel_id=(UC[\w-]{22})',
+                    r'<link[^>]+rel="canonical"[^>]+youtube\.com/channel/(UC[\w-]{22})',
+                    r'"externalId":"(UC[\w-]{22})"'):
+        if m := re.search(pattern, html):
+            return m.group(1)
+    return None
+
+
+def resolve_youtube_feed(page_url: str) -> str | None:
+    r = common.get(page_url, (CONNECT_TIMEOUT, READ_TIMEOUT), session(), lang="en")
+    if r is None or r.status >= 400:
+        return None
+    cid = extract_youtube_channel_id(r.text)
+    return f"{YOUTUBE_FEED}?channel_id={cid}" if cid else None
+
+
 def bridge(xml_url: str, html_url: str) -> tuple[str, str] | None:
     """(parser, page url) for rsshub Telegram/Jike routes: scrape the public page."""
     parts = [p for p in urlparse(xml_url).path.strip("/").split("/") if p]
@@ -268,7 +318,8 @@ def read_opml(raw: bytes, limit: int) -> list[dict]:
         elif xml in FEED_SKIP or xml.startswith(FEED_SKIP_PREFIX):
             continue
         else:
-            f["parser"], f["url"] = "rss", FEED_REPLACE.get(xml, xml)
+            f["parser"], f["url"] = "rss", youtube_feed_url(xml) or FEED_REPLACE.get(xml, xml)
+            f["youtube_page"] = is_youtube_channel_page(xml)   # resolved when fetched (fetch_feeds)
         feeds.append(f)
     return feeds[:limit] if limit > 0 else feeds
 
@@ -294,6 +345,9 @@ def fetch_feeds(feeds: list[dict]) -> list[Raw]:
 
     def one(url, group):
         via = "requests"
+        if group[0].get("youtube_page"):
+            if not (url := resolve_youtube_feed(url)):
+                return [], "could not find the YouTube channel id on this page", via
         r = common.get(url, (CONNECT_TIMEOUT, READ_TIMEOUT), session())
         if r and r.status in BLOCK_STATUS and (alt := common.get(
                 url, CONNECT_TIMEOUT + READ_TIMEOUT, impersonate=True, lang=LANG)):

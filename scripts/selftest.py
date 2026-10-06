@@ -389,6 +389,50 @@ def check_security():
        "feed html to text")
 
 
+def check_youtube_channel_urls():
+    uc = "UC" + "a" * 22
+    feed = "https://www.youtube.com/feeds/videos.xml"
+    eq(un.youtube_feed_url(f"https://www.youtube.com/channel/{uc}"), f"{feed}?channel_id={uc}", "channel url to feed")
+    eq(un.youtube_feed_url(f"https://youtube.com/channel/{uc}/videos"), f"{feed}?channel_id={uc}", "channel subpage to feed")
+    eq(un.youtube_feed_url("https://www.youtube.com/playlist?list=PLabcdefghijk"), f"{feed}?playlist_id=PLabcdefghijk", "playlist to feed")
+    eq(un.youtube_feed_url("https://www.youtube.com/@name"), None, "handle needs the network")
+    eq(un.youtube_feed_url("https://evil.example/channel/" + uc), None, "other hosts are not YouTube")
+    eq(un.youtube_feed_url("https://www.youtube.com/channel/UCshort"), None, "malformed channel id refused")
+    eq([un.is_youtube_channel_page(u) for u in ("https://www.youtube.com/@name", "https://www.youtube.com/c/name",
+        "https://www.youtube.com/user/name", "https://www.youtube.com/@", "https://evil.example/@name",
+        "https://www.youtube.com/watch?v=x")], [True, True, True, False, False, False], "which pages need resolving")
+    eq(un.extract_youtube_channel_id(f'<link rel="alternate" type="application/rss+xml" title="RSS" href="{feed}?channel_id={uc}">'),
+       uc, "channel id from the RSS link")
+    eq(un.extract_youtube_channel_id(f'<link rel="canonical" href="https://www.youtube.com/channel/{uc}">'), uc, "channel id from canonical")
+    eq(un.extract_youtube_channel_id(f'{{"externalId":"{uc}"}}'), uc, "channel id from metadata")
+    eq(un.extract_youtube_channel_id('<link type="application/rss+xml" href="x?channel_id=UC"><script>alert(1)</script>'), None,
+       "page content that is not a well-formed id is never returned")
+    eq(un.extract_youtube_channel_id('{"externalId":"UCshort"}'), None, "metadata id must be exactly 24 characters")
+    eq(un.extract_youtube_channel_id('{"externalId":"UC' + "a" * 40 + '"}'), None, "over-long id refused")
+    opml = (f'<opml><body><outline title="A" xmlUrl="https://www.youtube.com/channel/{uc}"/>'
+            f'<outline title="B" xmlUrl="https://www.youtube.com/@handle"/>'
+            f'<outline title="C" xmlUrl="https://c.example/rss"/></body></opml>').encode()
+    feeds = {f["title"]: f for f in un.read_opml(opml, 0)}
+    eq((feeds["A"]["url"], feeds["A"]["youtube_page"]), (f"{feed}?channel_id={uc}", False), "OPML channel url converted without fetching")
+    eq((feeds["B"]["url"], feeds["B"]["youtube_page"]), ("https://www.youtube.com/@handle", True), "OPML handle url marked for resolving")
+    eq(feeds["C"]["youtube_page"], False, "ordinary feeds are not resolved")
+    # fetch_feeds: the handle page is fetched, then the resolved feed is parsed
+    page = f'<link rel="alternate" type="application/rss+xml" href="{feed}?channel_id={uc}">'.encode()
+    rss = b'<rss version="2.0"><channel><title>T</title><item><title>Video</title><link>https://www.youtube.com/watch?v=abc</link><pubDate>Mon, 05 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>'
+    seen = []
+    def fake_get(url, timeout, session=None, impersonate=False, lang="en"):
+        seen.append(url)
+        return common.Resp(200, page if "@handle" in url else rss, {"content-type": "text/html" if "@handle" in url else "application/xml"}, url)
+    real_get, real_session = common.get, un.session
+    common.get, un.session = fake_get, lambda: None
+    try:
+        raw = un.fetch_feeds([feeds["B"]])
+    finally:
+        common.get, un.session = real_get, real_session
+    eq(seen, ["https://www.youtube.com/@handle", f"{feed}?channel_id={uc}"], "handle page fetched, then its resolved feed")
+    eq(len(raw), 1, "items parsed from the resolved feed")
+
+
 def check_opml_secret():
     import gzip, lzma
     opml = b'<opml version="2.0"><body><outline title="A" xmlUrl="https://a.example/rss"/></body></opml>'
