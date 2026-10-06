@@ -106,6 +106,32 @@ def write_atomic(path, payload) -> None:
         raise
 
 
+STATUS_FILE_NAME = "status.json"
+
+
+def record_status(path, key: str, state: str, now: str) -> bool:
+    """Record one health flag (for example cookies "ok" / "expired") in the
+    status file the reader shows warnings from. Returns True when the file was
+    written. A flag is rewritten only when its state changes, or while it is
+    "expired" (the reader needs a fresh `checked_at` to tell a new, still
+    rejected cookies upload from an old one). That keeps a healthy run from
+    producing a commit every day. A missing or damaged status file starts
+    over: it is only a hint, never the archive."""
+    p = Path(path)
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            doc = {}
+    except (OSError, ValueError):
+        doc = {}
+    current = doc.get(key) if isinstance(doc.get(key), dict) else {}
+    if current.get("state") == state and state != "expired":
+        return False
+    doc[key] = {"state": state, "checked_at": now}
+    write_atomic(p, doc)
+    return True
+
+
 def load_doc(path) -> dict:
     """Load an archive, refusing to continue on a corrupt file (writing now
     would discard everything)."""

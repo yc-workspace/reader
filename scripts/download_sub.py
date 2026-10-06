@@ -17,9 +17,11 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
-from common import BLANK_SUMMARY, is_youtube, load_doc, safe_lang, save_doc, valid_id
+from common import (BLANK_SUMMARY, STATUS_FILE_NAME, is_youtube, load_doc, record_status, safe_lang,
+                    save_doc, valid_id)
 from subtitle_priority import choose_track, track_rank
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
@@ -227,8 +229,11 @@ def main(argv=None) -> int:
     ap.add_argument("--max-transcribe", type=int, default=20, help="0 = unlimited")
     ap.add_argument("--max-asr-total", type=float, default=4 * 3600, metavar="SECONDS",
                     help="audio-seconds to transcribe per run (0 = unlimited)")
+    ap.add_argument("--status-file", default=None,
+                    help=f"health flags for the reader (default: {STATUS_FILE_NAME} next to --archive)")
     a = ap.parse_args(argv)
 
+    status_file = a.status_file or Path(a.archive).with_name(STATUS_FILE_NAME)
     out_dir, cookies = Path(a.output_dir), Path(a.cookies_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = load_doc(a.archive)
@@ -236,6 +241,7 @@ def main(argv=None) -> int:
         print(f"Removed {n} orphaned subtitle file(s).")
     have = {p.name.split(".", 1)[0] for p in out_dir.glob("*.vtt")}
     budget, n, dirty = Budget(a), Counter(), False
+    cookies_expired = False
 
     todo = [it for it in doc["items"] if valid_id(it.get("id")) and it.get("summary") is None
             and is_youtube(it.get("url", "")) and it["id"] not in have]
@@ -246,6 +252,7 @@ def main(argv=None) -> int:
                            a.probe_timeout)
         if cookies_rejected(err):
             print("[EXPIRED] cookies invalid")
+            cookies_expired = True
             break
         try:
             info = json.loads(out.strip().splitlines()[-1]) if rc == 0 else None
@@ -286,6 +293,7 @@ def main(argv=None) -> int:
             log = (out + err).lower()
             if cookies_rejected(err):
                 print("[EXPIRED] cookies invalid")
+                cookies_expired = True
                 break
             if rc is None:
                 n["failed"] += 1
@@ -303,6 +311,10 @@ def main(argv=None) -> int:
 
     if dirty:
         save_doc(a.archive, doc)
+    # No video was probed, so nothing is known about the cookies: leave the flag alone.
+    if cookies_expired or n["processed"]:
+        record_status(status_file, "cookies", "expired" if cookies_expired else "ok",
+                      datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     print(f"Done. {dict(n)} ({budget})")
     return 0
 

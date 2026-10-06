@@ -311,6 +311,45 @@ def check_offline_only():
        "offline-only: subtitle summarized, page not fetched, feed copy dropped")
 
 
+def check_cookies_status():
+    """An expired cookies file must leave a trace the reader can show; a healthy
+    run must not commit every day; an idle run must not claim cookies are fine."""
+    with tempfile.TemporaryDirectory() as d:
+        status = Path(d) / "status.json"
+        eq(common.record_status(status, "cookies", "ok", "t1"), True, "status: first write")
+        eq(common.record_status(status, "cookies", "ok", "t2"), False, "status: unchanged ok is not rewritten")
+        eq(json.loads(status.read_text())["cookies"]["checked_at"], "t1", "status: ok keeps its first time")
+        eq(common.record_status(status, "cookies", "expired", "t3"), True, "status: ok -> expired")
+        eq(common.record_status(status, "cookies", "expired", "t4"), True, "status: expired is refreshed every run")
+        eq(json.loads(status.read_text())["cookies"], {"state": "expired", "checked_at": "t4"}, "status: expired content")
+        status.write_text("{broken", encoding="utf-8")
+        eq(common.record_status(status, "cookies", "ok", "t5"), True, "status: damaged file starts over")
+
+        archive = Path(d) / "archive.json"
+        yid = "c" * 40
+        archive.write_text(json.dumps({"items": [{"id": yid, "url": "https://www.youtube.com/watch?v=abcdefghijk",
+                                                   "title": "v", "source": "y", "category": "x"}]}))
+        real_run = ds.run
+        argv = ["--archive", str(archive), "--output-dir", str(Path(d) / "subs"), "--cookies-path", str(Path(d) / "c.txt")]
+        try:
+            status.unlink()
+            ds.run = lambda cmd, timeout: (1, "", "ERROR: cookies are no longer valid")
+            with contextlib.redirect_stdout(io.StringIO()):
+                ds.main(argv)
+            eq(json.loads(status.read_text())["cookies"]["state"], "expired", "download_sub: rejected cookies are recorded")
+            ds.run = lambda cmd, timeout: (1, "", "ERROR: some other failure")
+            with contextlib.redirect_stdout(io.StringIO()):
+                ds.main(argv)
+            eq(json.loads(status.read_text())["cookies"]["state"], "ok", "download_sub: a run that was not rejected clears it")
+            status.unlink()
+            archive.write_text(json.dumps({"items": []}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                ds.main(argv)
+            eq(status.exists(), False, "download_sub: nothing probed means no claim about cookies")
+        finally:
+            ds.run = real_run
+
+
 def check_security():
     for u in ("http://169.254.169.254/latest/meta-data", "http://127.0.0.1:4416/", "http://localhost/",
               "http://10.1.2.3/", "http://[::1]/", "http://[::ffff:127.0.0.1]/", "http://0.0.0.0/",
