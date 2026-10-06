@@ -1,4 +1,4 @@
-name: Update News Snapshot
+name: Update News
 
 on:
   workflow_dispatch:
@@ -42,7 +42,6 @@ jobs:
 
       - name: Aggregate feeds
         env:
-          # Made with tools/opml_secret.html; extra parts only when needed.
           FOLLOW_OPML_B64: ${{ secrets.FOLLOW_OPML_B64 }}
           FOLLOW_OPML_B64_2: ${{ secrets.FOLLOW_OPML_B64_2 }}
           FOLLOW_OPML_B64_3: ${{ secrets.FOLLOW_OPML_B64_3 }}
