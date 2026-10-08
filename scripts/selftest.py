@@ -389,6 +389,54 @@ def check_security():
        "feed html to text")
 
 
+def check_telegram_channels():
+    page = "https://t.me/s/madchuwin"
+    for url in ("https://t.me/s/madchuwin", "https://t.me/madchuwin", "http://t.me/madchuwin/", "https://t.me/madchuwin/1234",
+                "https://t.me/s/madchuwin/", "https://telegram.me/madchuwin", "https://T.ME/madchuwin"):
+        eq(un.telegram_page_url(url), page, f"channel url normalised: {url}")
+    for url in ("https://t.me/joinchat/AAAA", "https://t.me/+abcdEFGH", "https://t.me/c/123456/789", "https://t.me/addstickers/pack",
+                "https://t.me/s/", "https://t.me/", "https://t.me/ab", "https://t.me/1channel", "https://t.me/name/notanumber",
+                "https://t.me/name/1/2", "https://evil.example/madchuwin", "https://t.me.evil.example/madchuwin",
+                "https://t.me/joinchat", "https://t.me/share/123", "https://t.me/addstickers", "https://t.me/proxy",
+                "ftp://t.me/madchuwin"):
+        eq(un.telegram_page_url(url), None, f"not a public channel: {url}")
+    eq(un.telegram_page_url("https://t.me/name?x=%2e%2e#frag"), "https://t.me/s/name", "query and fragment are dropped, never passed through")
+    eq(un.bridge("https://t.me/madchuwin", ""), ("telegram", page), "xmlUrl t.me/NAME bridges to the preview page")
+    eq(un.bridge("https://t.me/s/madchuwin", ""), ("telegram", page), "xmlUrl t.me/s/NAME bridges to the preview page")
+    eq(un.bridge("https://example.com/rss", "https://t.me/madchuwin"), ("telegram", page), "htmlUrl t.me/NAME still bridges (old form)")
+    eq(un.bridge("https://rsshub.app/telegram/channel/madchuwin", ""), ("telegram", page), "rsshub telegram route still bridges")
+    eq(un.bridge("https://example.com/rss", "https://example.com/"), None, "ordinary feeds are not bridged")
+    opml = (b'<opml><body><outline title="T" xmlUrl="https://t.me/madchuwin" category="news"/>'
+            b'<outline title="J" xmlUrl="https://t.me/joinchat/AAAA"/></body></opml>')
+    feeds = un.read_opml(opml, 0)
+    eq((feeds[0]["parser"], feeds[0]["url"]), ("telegram", page), "OPML telegram entry uses the telegram parser")
+    eq(feeds[1]["parser"], "rss", "an invite link is not treated as a channel")
+    html = """<div class="tgme_widget_messages_list">
+      <div class="tgme_widget_message_wrap"><div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="madchuwin/101">
+        <div class="tgme_widget_message_text js-message_text" dir="auto">第一則 <b>重點</b><br/>第二行</div>
+        <div class="tgme_widget_message_info"><a class="tgme_widget_message_date" href="https://t.me/madchuwin/101"><time datetime="2026-10-05T08:00:00+00:00" class="time">08:00</time></a></div></div></div>
+      <div class="tgme_widget_message_wrap"><div class="tgme_widget_message js-widget_message" data-post="../evil/1">
+        <div class="tgme_widget_message_text">不該收的</div><time datetime="2026-10-05T09:00:00+00:00"></time></div></div>
+      <div class="tgme_widget_message_wrap"><div class="tgme_widget_message js-widget_message" data-post="madchuwin/102">
+        <div class="tgme_widget_message_photo_wrap"></div><time datetime="2026-10-05T10:00:00+00:00"></time></div></div>
+    </div>"""
+    raw = un.parse_telegram(html, {"category": "news", "title": "T"})
+    eq([x.url for x in raw], ["https://t.me/madchuwin/101"], "only well-formed posts that have text and a date are kept")
+    eq(len(raw), 1, "post with attribute-built path or no text is dropped")
+    seen = []
+    def fake_get(url, timeout, session=None, impersonate=False, lang="en"):
+        seen.append(url)
+        return common.Resp(200, html.encode(), {"content-type": "text/html"}, url)
+    real_get, real_session = common.get, un.session
+    common.get, un.session = fake_get, lambda: None
+    try:
+        fetched = un.fetch_feeds([feeds[0]])
+    finally:
+        common.get, un.session = real_get, real_session
+    eq(seen, [page], "the preview page is the only thing fetched")
+    eq(len(fetched), 1, "items come out of the fetched preview page")
+
+
 def check_youtube_channel_urls():
     uc = "UC" + "a" * 22
     feed = "https://www.youtube.com/feeds/videos.xml"

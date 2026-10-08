@@ -270,6 +270,28 @@ def resolve_youtube_feed(page_url: str) -> str | None:
     return f"{YOUTUBE_FEED}?channel_id={cid}" if cid else None
 
 
+TG_HOSTS = {"t.me", "telegram.me"}
+TG_CHANNEL = re.compile(r"[A-Za-z][A-Za-z0-9_]{3,31}")
+TG_NOT_CHANNELS = {"joinchat", "addstickers", "addemoji", "share", "proxy", "socks", "login", "iv", "setlanguage", "bg", "c"}
+
+
+def telegram_page_url(url: str) -> str | None:
+    """The public preview page (https://t.me/s/NAME) for a Telegram channel url: t.me/NAME, t.me/s/NAME or a
+    post link t.me/NAME/123. None for anything else (invite links, private t.me/c/... links, other hosts).
+    NAME is matched strictly because it becomes part of the page url that gets fetched."""
+    u = urlparse(url)
+    if u.scheme not in ("http", "https") or u.netloc.lower() not in TG_HOSTS:
+        return None
+    parts = [p for p in u.path.split("/") if p]
+    if parts[:1] == ["s"]:
+        parts = parts[1:]
+    if not parts or parts[0].lower() in TG_NOT_CHANNELS or not TG_CHANNEL.fullmatch(parts[0]):
+        return None
+    if len(parts) > 2 or (len(parts) == 2 and not parts[1].isdigit()):
+        return None
+    return f"https://t.me/s/{parts[0]}"
+
+
 def bridge(xml_url: str, html_url: str) -> tuple[str, str] | None:
     """(parser, page url) for rsshub Telegram/Jike routes: scrape the public page."""
     parts = [p for p in urlparse(xml_url).path.strip("/").split("/") if p]
@@ -278,6 +300,9 @@ def bridge(xml_url: str, html_url: str) -> tuple[str, str] | None:
             return "telegram", f"https://t.me/s/{parts[2]}"
         if parts[:1] == ["jike"] and len(parts) >= 3 and parts[1] in ("topic", "user"):
             return "jike", f"https://m.okjike.com/{parts[1]}s/{parts[2]}"
+    for candidate in (xml_url, html_url):
+        if page := telegram_page_url(candidate):
+            return "telegram", page
     for prefix, kind in (("https://t.me/s/", "telegram"), ("https://m.okjike.com/topics/", "jike"),
                          ("https://m.okjike.com/users/", "jike")):
         if html_url.startswith(prefix):
