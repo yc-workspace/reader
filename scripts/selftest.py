@@ -534,19 +534,13 @@ def check_merge_and_id():
             {"id": "a" * 40, "title": "old", "url": "https://x.example/1", "last_seen_at": ago(61)},
             {"id": "b" * 40, "title": "new", "url": "https://x.example/2", "last_seen_at": ago(59)},
             {"id": "c" * 40, "title": "legacy", "url": "https://x.example/3", "published_at": ago(10)}]})
-        # main() also scrapes BestBlogs: on a runner with network that adds live
-        # issues to the archive. The test is about retention only, so stay offline.
-        real_bb, un.fetch_bestblogs = un.fetch_bestblogs, lambda archive: []
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                un.main(["--output-dir", d])
-            kept = lambda: sorted(r["title"] for r in common.load_doc(Path(d) / "archive.json")["items"])
-            eq(kept(), ["legacy", "new"], "default retention: 60 days of last_seen_at")
-            with contextlib.redirect_stdout(io.StringIO()):
-                un.main(["--output-dir", d, "--archive-days", "5"])
-            eq(kept(), [], "retention days configurable")
-        finally:
-            un.fetch_bestblogs = real_bb
+        with contextlib.redirect_stdout(io.StringIO()):
+            un.main(["--output-dir", d])
+        kept = lambda: sorted(r["title"] for r in common.load_doc(Path(d) / "archive.json")["items"])
+        eq(kept(), ["legacy", "new"], "default retention: 60 days of last_seen_at")
+        with contextlib.redirect_stdout(io.StringIO()):
+            un.main(["--output-dir", d, "--archive-days", "5"])
+        eq(kept(), [], "retention days configurable")
 
 
 if __name__ == "__main__":
