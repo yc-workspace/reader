@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import copy
 import gzip
 import hashlib
 import json
@@ -63,8 +62,6 @@ DEV_ORIGIN = re.compile(r"^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[^.]+\.l
 VOCUS_AUTHOR = re.compile(r"^(https?://(?:www\.)?vocus\.cc)/@[^/]+/([0-9A-Za-z]+)(.*)$")
 TG_POST = re.compile(r"[A-Za-z0-9_]{1,64}/\d{1,12}")
 JIKE_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
-BESTBLOGS = "https://www.bestblogs.dev"
-BESTBLOGS_ISSUE = re.compile(r"^https?://(?:www\.)?bestblogs\.dev(?:/[a-z]{2})?/newsletter/issue(\d{1,4})/?$", re.I)
 
 
 @dataclass
@@ -129,8 +126,6 @@ def canonical_url(raw: str, source: str = "", feed_url: str = "") -> str:
         return url
     if m := VOCUS_AUTHOR.match(url):
         return f"{m[1]}/article/{m[2]}{m[3]}"
-    if m := BESTBLOGS_ISSUE.match(url):        # one spelling per issue, any language
-        return f"{BESTBLOGS}/newsletter/issue{int(m[1])}"
     return url
 
 
@@ -403,68 +398,6 @@ def fetch_feeds(feeds: list[dict]) -> list[Raw]:
     return out
 
 
-def bestblogs_issue(n: int, prev: datetime | None):
-    """(title, body html, date) of one issue page, or None if it doesn't exist.
-
-    Date: the first YYYY-MM-DD on the page (the listing shows "Newsletter
-    2024-06-12"); else article:published_time, a bare MM-DD, dated with the
-    previous issue's year (rolling over when the month goes backwards)."""
-    r = common.get(f"{BESTBLOGS}/newsletter/issue{n}", (CONNECT_TIMEOUT, 30), session())
-    if r is None or r.status != 200:
-        return None
-    soup = BeautifulSoup(r.text, "html.parser")
-    meta = lambda prop: (soup.select_one(f'meta[property="{prop}"]') or {}).get("content") or ""
-    title = meta("og:title") or (soup.title.get_text(" ", strip=True) if soup.title else "")
-    title = re.sub(r"\s*\|\s*BestBlogs\.dev\s*$", "", title.strip())
-    root = copy.copy(soup.select_one("main") or soup.select_one("article") or soup.body or soup)
-    for t in root.find_all(("script", "style", "noscript", "nav", "header", "footer")):
-        t.decompose()
-    text = root.get_text(" ", strip=True)
-    date = None
-    if m := re.search(r"(20\d{2})-(\d{2})-(\d{2})(?!\d)", text):
-        date = parse_date(m[0])
-    elif prev and (m := re.search(r"(\d{1,2})-(\d{1,2})", meta("article:published_time"))):
-        month, day = int(m[1]), int(m[2])
-        # roll into the next year only on a real wrap (Dec -> Jan): the site's
-        # own listing has out-of-order dates within a year (issue 101 < 100)
-        year = prev.year + (prev.month - month > 6)
-        try:
-            date = datetime(year, month, day, tzinfo=UTC)
-        except ValueError:
-            pass
-    return title, (str(root) if len(text) >= 500 else ""), date
-
-
-def fetch_bestblogs(archive: dict) -> list[Raw]:
-    """Issues at /newsletter/issueN (the index is a JS shell). Known issues are
-    re-emitted from storage so they stay inside retention -- refetched only
-    while their date is unknown. New ones are fetched until 3 consecutive
-    misses; the issue html becomes the feed copy, so summarize_feed never
-    fetches the page again. Runs whether or not an OPML file is given."""
-    item = lambda n, title, when, body="": Raw(
-        "tech", "BestBlogs", title, f"{BESTBLOGS}/newsletter/issue{n}", when,
-        content=body)
-    known = {int(m[1]): r for r in archive.values()
-             if (m := BESTBLOGS_ISSUE.match(str(r.get("url", "")))) and r.get("title")}
-    out, prev, dated, new = [], None, 0, 0
-    for n, r in sorted(known.items()):
-        when = parse_date(r.get("published_at"))
-        if when is None and (got := bestblogs_issue(n, prev)) and got[2]:
-            when, dated = got[2], dated + 1
-        prev = when or prev
-        out.append(item(n, r["title"], when))
-    n, misses = max(known, default=0) + 1, 0
-    while n <= 500 and misses < 3:
-        got = bestblogs_issue(n, prev)
-        misses = 0 if got else misses + 1
-        if got and got[0]:
-            out.append(item(n, got[0], got[2], got[1]))
-            prev, new = got[2] or prev, new + 1
-        n += 1
-    print(f"BestBlogs: {len(known)} known ({dated} newly dated), {new} new")
-    return out
-
-
 # ---- inbox ---------------------------------------------------------------------
 # data/inbox.json is written by the reader (feed-github.js) through the GitHub
 # API: {"urls": [{"url", "added"}]}. Read-only here -- the reader prunes it --
@@ -613,7 +546,6 @@ def main(argv=None) -> int:
         sys.exit(f"ERROR: no OPML ({where}); make the secret with tools/opml_secret.html")
     else:
         print(f"WARNING: no OPML ({where}); RSS sources skipped.")
-    raws += fetch_bestblogs(archive)
     raws += fetch_inbox(archive, Path(a.output_dir) / "inbox.json", a.archive_days)
 
     ingest(archive, raws, now)
