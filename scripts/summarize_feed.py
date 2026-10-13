@@ -51,7 +51,7 @@ pseudoyu.com readtrung.com ruanyifeng.com samaltman.com shenlvmeng.github.com sh
 sirupsen.com sive.rs smallbooks.com.tw soidid.tw starrocket.io steveblank.com substack.com
 techcabal.com tiaodao.typlog.io travelwithbook.com trensse.com
 unchartedterritories.tomaspueyo.com uselessetymology.com vox.com waitbutwhy.com werner.wiki
-whogovernstw.org yuanyu.idv.tw zmonster.me bestblogs.dev
+whogovernstw.org yuanyu.idv.tw zmonster.me
 """.split())
 
 
