@@ -1,0 +1,524 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.100 --> 00:00:01.553 align:start position:0%
+ 
+So<00:00:00.190><c>,</c><00:00:00.281><c> the</c><00:00:00.463><c> so-called</c><00:00:00.917><c> ASIC</c><00:00:01.144><c> refers</c><00:00:01.462><c> to</c>
+
+00:00:01.553 --> 00:00:01.599 align:start position:0%
+So, the so-called ASIC refers to
+ 
+
+00:00:01.599 --> 00:00:03.007 align:start position:0%
+So, the so-called ASIC refers to
+ Application-Specific<00:00:02.553><c> Integrated</c>
+
+00:00:03.007 --> 00:00:03.053 align:start position:0%
+ Application-Specific Integrated
+ 
+
+00:00:03.053 --> 00:00:04.613 align:start position:0%
+ Application-Specific Integrated
+ Circuits<00:00:03.416><c>.</c><00:00:03.562><c> Simply</c><00:00:03.970><c> put</c><00:00:04.146><c>,</c><00:00:04.263><c> in</c><00:00:04.438><c> the</c>
+
+00:00:04.613 --> 00:00:04.671 align:start position:0%
+ Circuits. Simply put, in the
+ 
+
+00:00:04.671 --> 00:00:06.424 align:start position:0%
+ Circuits. Simply put, in the
+ development<00:00:05.372><c> of</c><00:00:05.548><c> AI</c><00:00:05.665><c>,</c><00:00:05.781><c> everyone</c><00:00:06.307><c> is</c>
+
+00:00:06.424 --> 00:00:06.482 align:start position:0%
+ development of AI, everyone is
+ 
+
+00:00:06.482 --> 00:00:08.751 align:start position:0%
+ development of AI, everyone is
+ scrambling<00:00:07.125><c> for</c><00:00:07.359><c> NVIDIA's</c><00:00:07.884><c> GPUs</c><00:00:08.118><c>.</c><00:00:08.277><c> However</c><00:00:08.692><c>,</c>
+
+00:00:08.751 --> 00:00:08.811 align:start position:0%
+ scrambling for NVIDIA's GPUs. However,
+ 
+
+00:00:08.811 --> 00:00:11.125 align:start position:0%
+ scrambling for NVIDIA's GPUs. However,
+ as<00:00:08.989><c> we</c><00:00:09.167><c> move</c><00:00:09.463><c> into</c><00:00:09.760><c> a</c><00:00:09.879><c> more</c><00:00:10.176><c> advanced</c><00:00:10.710><c> era</c><00:00:10.947><c> and</c>
+
+00:00:11.125 --> 00:00:11.185 align:start position:0%
+ as we move into a more advanced era and
+ 
+
+00:00:11.185 --> 00:00:12.787 align:start position:0%
+ as we move into a more advanced era and
+ look<00:00:11.481><c> to</c><00:00:11.659><c> implement</c><00:00:12.253><c> practical</c>
+
+00:00:12.787 --> 00:00:12.846 align:start position:0%
+ look to implement practical
+ 
+
+00:00:12.846 --> 00:00:14.686 align:start position:0%
+ look to implement practical
+ applications<00:00:13.558><c>,</c><00:00:13.677><c> these</c><00:00:14.033><c> major</c><00:00:14.389><c> cloud</c>
+
+00:00:14.686 --> 00:00:14.745 align:start position:0%
+ applications, these major cloud
+ 
+
+00:00:14.745 --> 00:00:17.060 align:start position:0%
+ applications, these major cloud
+ providers<00:00:15.339><c> must</c><00:00:15.636><c> first</c><00:00:15.992><c> find</c><00:00:16.288><c> ways</c><00:00:16.585><c> to</c><00:00:16.763><c> lower</c>
+
+00:00:17.060 --> 00:00:17.119 align:start position:0%
+ providers must first find ways to lower
+ 
+
+00:00:17.119 --> 00:00:19.458 align:start position:0%
+ providers must first find ways to lower
+ their<00:00:17.475><c> costs</c><00:00:17.772><c>.</c><00:00:17.932><c> They</c><00:00:18.225><c> cannot</c><00:00:18.636><c> have</c><00:00:18.929><c> all</c><00:00:19.164><c> their</c>
+
+00:00:19.458 --> 00:00:19.516 align:start position:0%
+ their costs. They cannot have all their
+ 
+
+00:00:19.516 --> 00:00:21.571 align:start position:0%
+ their costs. They cannot have all their
+ chips<00:00:19.868><c> controlled</c><00:00:20.514><c> by</c><00:00:20.690><c> NVIDIA</c><00:00:21.042><c>,</c><00:00:21.160><c> so</c><00:00:21.336><c> they</c>
+
+00:00:21.571 --> 00:00:21.629 align:start position:0%
+ chips controlled by NVIDIA, so they
+ 
+
+00:00:21.629 --> 00:00:23.808 align:start position:0%
+ chips controlled by NVIDIA, so they
+ need<00:00:21.923><c> to</c><00:00:22.099><c> develop</c><00:00:22.569><c> their</c><00:00:22.921><c> own</c><00:00:23.097><c>.</c><00:00:23.256><c> Secondly</c><00:00:23.747><c>,</c>
+
+00:00:23.808 --> 00:00:23.870 align:start position:0%
+ need to develop their own. Secondly,
+ 
+
+00:00:23.870 --> 00:00:25.958 align:start position:0%
+ need to develop their own. Secondly,
+ self-developed<00:00:24.791><c> chips</c><00:00:25.159><c> can</c><00:00:25.405><c> be</c><00:00:25.589><c> better</c>
+
+00:00:25.958 --> 00:00:26.019 align:start position:0%
+ self-developed chips can be better
+ 
+
+00:00:26.019 --> 00:00:27.862 align:start position:0%
+ self-developed chips can be better
+ customized<00:00:26.695><c> to</c><00:00:26.879><c> perform</c><00:00:27.370><c> specific</c>
+
+00:00:27.862 --> 00:00:27.923 align:start position:0%
+ customized to perform specific
+ 
+
+00:00:27.923 --> 00:00:30.073 align:start position:0%
+ customized to perform specific
+ functions<00:00:28.537><c> for</c><00:00:28.783><c> specialized</c><00:00:29.520><c> purposes</c><00:00:30.011><c>.</c>
+
+00:00:30.073 --> 00:00:30.173 align:start position:0%
+ functions for specialized purposes.
+ 
+
+00:00:30.173 --> 00:00:32.937 align:start position:0%
+ functions for specialized purposes.
+ Therefore<00:00:30.827><c>,</c><00:00:30.973><c> ASIC</c><00:00:31.337><c> essentially</c><00:00:32.210><c> represents</c>
+
+00:00:32.937 --> 00:00:33.010 align:start position:0%
+ Therefore, ASIC essentially represents
+ 
+
+00:00:33.010 --> 00:00:35.775 align:start position:0%
+ Therefore, ASIC essentially represents
+ another<00:00:33.592><c> vital</c><00:00:34.029><c> force</c><00:00:34.465><c> in</c><00:00:34.684><c> this</c><00:00:35.047><c> future</c><00:00:35.557><c> era</c>
+
+00:00:35.775 --> 00:00:35.848 align:start position:0%
+ another vital force in this future era
+ 
+
+00:00:35.848 --> 00:00:38.141 align:start position:0%
+ another vital force in this future era
+ of<00:00:36.066><c> AI</c><00:00:36.284><c> development</c><00:00:37.085><c>.</c><00:00:37.258><c> And</c><00:00:37.552><c> just</c><00:00:37.920><c> how</c>
+
+00:00:38.141 --> 00:00:38.215 align:start position:0%
+ of AI development. And just how
+ 
+
+00:00:38.215 --> 00:00:40.530 align:start position:0%
+ of AI development. And just how
+ important<00:00:38.952><c> is</c><00:00:39.173><c> it</c><00:00:39.320><c>?</c><00:00:39.494><c> To</c><00:00:39.676><c> put</c><00:00:39.920><c> it</c><00:00:40.103><c> simply</c><00:00:40.469><c>,</c>
+
+00:00:40.530 --> 00:00:40.591 align:start position:0%
+ important is it? To put it simply,
+ 
+
+00:00:40.591 --> 00:00:42.786 align:start position:0%
+ important is it? To put it simply,
+ according<00:00:41.201><c> to</c><00:00:41.384><c> forecasts</c><00:00:41.933><c>,</c><00:00:42.055><c> from</c><00:00:42.360><c> 2023</c><00:00:42.664><c> to</c>
+
+00:00:42.786 --> 00:00:42.847 align:start position:0%
+ according to forecasts, from 2023 to
+ 
+
+00:00:42.847 --> 00:00:45.104 align:start position:0%
+ according to forecasts, from 2023 to
+ 2028<00:00:43.091><c>,</c><00:00:43.213><c> the</c><00:00:43.457><c> compound</c><00:00:44.006><c> annual</c><00:00:44.433><c> growth</c><00:00:44.860><c> rate</c>
+
+00:00:45.104 --> 00:00:45.165 align:start position:0%
+ 2028, the compound annual growth rate
+ 
+
+00:00:45.165 --> 00:00:47.421 align:start position:0%
+ 2028, the compound annual growth rate
+ for<00:00:45.409><c> high-end</c><00:00:45.957><c> global</c><00:00:46.384><c> data</c><00:00:46.689><c> centers</c><00:00:47.177><c> will</c>
+
+00:00:47.421 --> 00:00:47.482 align:start position:0%
+ for high-end global data centers will
+ 
+
+00:00:47.482 --> 00:00:49.555 align:start position:0%
+ for high-end global data centers will
+ be<00:00:47.665><c> 44</c><00:00:47.787><c>%</c><00:00:47.848><c>,</c><00:00:47.970><c> but</c><00:00:48.214><c> ASIC's</c><00:00:48.641><c> compound</c><00:00:49.189><c> annual</c>
+
+00:00:49.555 --> 00:00:49.616 align:start position:0%
+ be 44%, but ASIC's compound annual
+ 
+
+00:00:49.616 --> 00:00:51.995 align:start position:0%
+ be 44%, but ASIC's compound annual
+ growth<00:00:50.043><c> rate</c><00:00:50.348><c> is</c><00:00:50.531><c> even</c><00:00:50.836><c> higher</c><00:00:51.202><c>,</c><00:00:51.324><c> reaching</c><00:00:51.873><c> 52</c>
+
+00:00:51.995 --> 00:00:54.464 align:start position:0%
+ growth rate is even higher, reaching 52
+%<00:00:52.056><c>.</c><00:00:52.217><c> It</c><00:00:52.404><c> is</c><00:00:52.591><c> expected</c><00:00:53.153><c> that</c><00:00:53.465><c> by</c><00:00:53.653><c> 2027</c><00:00:53.902><c>,</c><00:00:54.027><c> the</c><00:00:54.277><c> two</c>
+
+00:00:54.464 --> 00:00:54.527 align:start position:0%
+%. It is expected that by 2027, the two
+ 
+
+00:00:54.527 --> 00:00:56.775 align:start position:0%
+%. It is expected that by 2027, the two
+ will<00:00:54.839><c> reach</c><00:00:55.214><c> a</c><00:00:55.339><c> "</c><00:00:55.401><c>golden</c><00:00:55.838><c> cross</c><00:00:56.150><c>,</c><00:00:56.213><c>"</c><00:00:56.338><c> meaning</c>
+
+00:00:56.775 --> 00:00:56.837 align:start position:0%
+ will reach a "golden cross," meaning
+ 
+
+00:00:56.837 --> 00:00:59.273 align:start position:0%
+ will reach a "golden cross," meaning
+ that<00:00:57.150><c> ASIC</c><00:00:57.462><c> shipments</c><00:00:58.086><c> will</c><00:00:58.336><c>,</c><00:00:58.461><c> for</c><00:00:58.711><c> the</c><00:00:58.960><c> first</c>
+
+00:00:59.273 --> 00:00:59.335 align:start position:0%
+ that ASIC shipments will, for the first
+ 
+
+00:00:59.335 --> 00:01:01.609 align:start position:0%
+ that ASIC shipments will, for the first
+ time<00:00:59.585><c>,</c><00:00:59.710><c> surpass</c><00:01:00.209><c> those</c><00:01:00.584><c> of</c><00:01:00.771><c> GPUs</c><00:01:01.021><c>.</c><00:01:01.184><c> This</c><00:01:01.487><c> is</c>
+
+00:01:01.609 --> 00:01:01.670 align:start position:0%
+ time, surpass those of GPUs. This is
+ 
+
+00:01:01.670 --> 00:01:03.857 align:start position:0%
+ time, surpass those of GPUs. This is
+ why<00:01:01.913><c> you</c><00:01:02.156><c> see</c><00:01:02.399><c> Google's</c><00:01:02.946><c> stock</c><00:01:03.310><c> price</c><00:01:03.675><c> and</c>
+
+00:01:03.857 --> 00:01:03.918 align:start position:0%
+ why you see Google's stock price and
+ 
+
+00:01:03.918 --> 00:01:06.198 align:start position:0%
+ why you see Google's stock price and
+ performance<00:01:04.647><c> being</c><00:01:05.012><c> so</c><00:01:05.194><c> strong</c><00:01:05.559><c>.</c><00:01:05.720><c> It's</c><00:01:06.018><c> not</c>
+
+00:01:06.198 --> 00:01:06.257 align:start position:0%
+ performance being so strong. It's not
+ 
+
+00:01:06.257 --> 00:01:08.588 align:start position:0%
+ performance being so strong. It's not
+ that<00:01:06.556><c> NVIDIA</c><00:01:06.974><c> is</c><00:01:07.154><c> doing</c><00:01:07.512><c> poorly</c><00:01:07.871><c>,</c><00:01:07.990><c> but</c><00:01:08.229><c> rather</c>
+
+00:01:08.588 --> 00:01:08.647 align:start position:0%
+ that NVIDIA is doing poorly, but rather
+ 
+
+00:01:08.647 --> 00:01:10.918 align:start position:0%
+ that NVIDIA is doing poorly, but rather
+ that<00:01:08.946><c> the</c><00:01:09.185><c> entire</c><00:01:09.603><c> industry</c><00:01:10.141><c> is</c><00:01:10.320><c> undergoing</c>
+
+00:01:10.918 --> 00:01:10.978 align:start position:0%
+ that the entire industry is undergoing
+ 
+
+00:01:10.978 --> 00:01:13.164 align:start position:0%
+ that the entire industry is undergoing
+ some<00:01:11.276><c> shifts</c><00:01:11.635><c>.</c><00:01:11.795><c> With</c><00:01:12.068><c> this</c><00:01:12.342><c> shift</c><00:01:12.616><c>,</c><00:01:12.726><c> the</c><00:01:12.945><c> rise</c>
+
+00:01:13.164 --> 00:01:13.218 align:start position:0%
+ some shifts. With this shift, the rise
+ 
+
+00:01:13.218 --> 00:01:15.300 align:start position:0%
+ some shifts. With this shift, the rise
+ of<00:01:13.383><c> ASICs</c><00:01:13.711><c> has</c><00:01:13.930><c> also</c><00:01:14.204><c> brought</c><00:01:14.642><c> a</c><00:01:14.752><c> great</c><00:01:15.081><c> deal</c>
+
+00:01:15.300 --> 00:01:15.354 align:start position:0%
+ of ASICs has also brought a great deal
+ 
+
+00:01:15.354 --> 00:01:17.490 align:start position:0%
+ of ASICs has also brought a great deal
+ of<00:01:15.519><c> discussion</c><00:01:16.121><c> and</c><00:01:16.340><c> attention</c><00:01:16.888><c> to</c><00:01:17.052><c> relevant</c>
+
+00:01:17.490 --> 00:01:17.545 align:start position:0%
+ of discussion and attention to relevant
+ 
+
+00:01:17.545 --> 00:01:19.314 align:start position:0%
+ of discussion and attention to relevant
+ Taiwanese<00:01:18.093><c> companies</c><00:01:18.586><c>.</c><00:01:18.741><c> Beyond</c><00:01:19.142><c> the</c>
+
+00:01:19.314 --> 00:01:19.371 align:start position:0%
+ Taiwanese companies. Beyond the
+ 
+
+00:01:19.371 --> 00:01:21.377 align:start position:0%
+ Taiwanese companies. Beyond the
+ aforementioned<00:01:20.230><c> Global</c><00:01:20.632><c> Unichip</c><00:01:21.033><c>,</c><00:01:21.147><c> some</c>
+
+00:01:21.377 --> 00:01:21.434 align:start position:0%
+ aforementioned Global Unichip, some
+ 
+
+00:01:21.434 --> 00:01:23.669 align:start position:0%
+ aforementioned Global Unichip, some
+ institutional<00:01:22.236><c> investors</c><00:01:22.809><c> have</c><00:01:23.096><c> also</c><00:01:23.382><c> set</c><00:01:23.612><c> a</c>
+
+00:01:23.669 --> 00:01:23.726 align:start position:0%
+ institutional investors have also set a
+ 
+
+00:01:23.726 --> 00:01:25.847 align:start position:0%
+ institutional investors have also set a
+ five-digit<00:01:24.357><c> target</c><00:01:24.758><c> price</c><00:01:25.102><c> for</c><00:01:25.331><c> MediaTek</c><00:01:25.789><c>.</c>
+
+00:01:25.847 --> 00:01:25.947 align:start position:0%
+ five-digit target price for MediaTek.
+ 
+
+00:01:25.947 --> 00:01:27.788 align:start position:0%
+ five-digit target price for MediaTek.
+ Of<00:01:26.104><c> course</c><00:01:26.420><c>,</c><00:01:26.525><c> if</c><00:01:26.683><c> you</c><00:01:26.893><c> ask</c><00:01:27.104><c> me</c><00:01:27.209><c>,</c><00:01:27.314><c> I</c><00:01:27.419><c> believe</c>
+
+00:01:27.788 --> 00:01:27.840 align:start position:0%
+ Of course, if you ask me, I believe
+ 
+
+00:01:27.840 --> 00:01:29.787 align:start position:0%
+ Of course, if you ask me, I believe
+ these<00:01:28.156><c> target</c><00:01:28.524><c> prices</c><00:01:28.892><c> carry</c><00:01:29.208><c> significant</c>
+
+00:01:29.787 --> 00:01:29.839 align:start position:0%
+ these target prices carry significant
+ 
+
+00:01:29.839 --> 00:01:31.575 align:start position:0%
+ these target prices carry significant
+ professional<00:01:30.523><c> weight</c><00:01:30.839><c>,</c><00:01:30.944><c> but</c><00:01:31.154><c> they</c><00:01:31.417><c> all</c>
+
+00:01:31.575 --> 00:01:31.628 align:start position:0%
+ professional weight, but they all
+ 
+
+00:01:31.628 --> 00:01:33.643 align:start position:0%
+ professional weight, but they all
+ require<00:01:32.048><c> time</c><00:01:32.259><c>.</c><00:01:32.412><c> Actually</c><00:01:32.859><c>,</c><00:01:32.971><c> if</c><00:01:33.139><c> the</c><00:01:33.363><c> stock</c>
+
+00:01:33.643 --> 00:01:33.699 align:start position:0%
+ require time. Actually, if the stock
+ 
+
+00:01:33.699 --> 00:01:35.546 align:start position:0%
+ require time. Actually, if the stock
+ price<00:01:34.034><c> moves</c><00:01:34.370><c> too</c><00:01:34.594><c> fast</c><00:01:34.874><c> or</c><00:01:35.042><c> rises</c><00:01:35.378><c> too</c>
+
+00:01:35.546 --> 00:01:35.602 align:start position:0%
+ price moves too fast or rises too
+ 
+
+00:01:35.602 --> 00:01:37.672 align:start position:0%
+ price moves too fast or rises too
+ quickly<00:01:35.993><c>,</c><00:01:36.105><c> it</c><00:01:36.273><c> might</c><00:01:36.609><c> not</c><00:01:36.833><c> be</c><00:01:37.001><c> a</c><00:01:37.113><c> good</c><00:01:37.392><c> sign</c><00:01:37.616><c>,</c>
+
+00:01:37.672 --> 00:01:37.728 align:start position:0%
+ quickly, it might not be a good sign,
+ 
+
+00:01:37.728 --> 00:01:39.911 align:start position:0%
+ quickly, it might not be a good sign,
+ because<00:01:38.176><c> logically</c><00:01:38.736><c> it</c><00:01:38.903><c> may</c><00:01:39.127><c> take</c><00:01:39.407><c> a</c><00:01:39.519><c> year</c><00:01:39.799><c> or</c>
+
+00:01:39.911 --> 00:01:39.967 align:start position:0%
+ because logically it may take a year or
+ 
+
+00:01:39.967 --> 00:01:42.094 align:start position:0%
+ because logically it may take a year or
+ even<00:01:40.247><c> two</c><00:01:40.471><c> to</c><00:01:40.638><c> reach</c><00:01:40.974><c> those</c><00:01:41.310><c> target</c><00:01:41.702><c> prices</c><00:01:42.038><c>.</c>
+
+00:01:42.094 --> 00:01:42.194 align:start position:0%
+ even two to reach those target prices.
+ 
+
+00:01:42.194 --> 00:01:44.102 align:start position:0%
+ even two to reach those target prices.
+ If<00:01:42.357><c> it</c><00:01:42.521><c> surges</c><00:01:42.902><c> over</c><00:01:43.175><c> a</c><00:01:43.284><c> short</c><00:01:43.611><c> period</c><00:01:43.993><c> of</c>
+
+00:01:44.102 --> 00:01:44.157 align:start position:0%
+ If it surges over a short period of
+ 
+
+00:01:44.157 --> 00:01:46.174 align:start position:0%
+ If it surges over a short period of
+ just<00:01:44.429><c> one</c><00:01:44.648><c> or</c><00:01:44.811><c> two</c><00:01:45.029><c> months</c><00:01:45.356><c>,</c><00:01:45.466><c> you</c><00:01:45.684><c> should</c><00:01:46.065><c> be</c>
+
+00:01:46.174 --> 00:01:46.229 align:start position:0%
+ just one or two months, you should be
+ 
+
+00:01:46.229 --> 00:01:47.810 align:start position:0%
+ just one or two months, you should be
+ wary<00:01:46.502><c> of</c><00:01:46.665><c> the</c><00:01:46.883><c> risk</c><00:01:47.156><c> of</c><00:01:47.320><c> chasing</c><00:01:47.756><c> a</c>
+
+00:01:47.810 --> 00:01:47.865 align:start position:0%
+ wary of the risk of chasing a
+ 
+
+00:01:47.865 --> 00:01:50.236 align:start position:0%
+ wary of the risk of chasing a
+ short-term<00:01:48.465><c> high</c><00:01:48.683><c>.</c><00:01:48.838><c> It</c><00:01:49.028><c> is</c><00:01:49.219><c> worth</c><00:01:49.601><c> mentioning</c>
+
+00:01:50.236 --> 00:01:50.300 align:start position:0%
+ short-term high. It is worth mentioning
+ 
+
+00:01:50.300 --> 00:01:52.398 align:start position:0%
+ short-term high. It is worth mentioning
+ that<00:01:50.618><c> when</c><00:01:50.936><c> talking</c><00:01:51.445><c> about</c><00:01:51.826><c> the</c><00:01:52.080><c> three</c>
+
+00:01:52.398 --> 00:01:52.462 align:start position:0%
+ that when talking about the three
+ 
+
+00:01:52.462 --> 00:01:54.497 align:start position:0%
+ that when talking about the three
+ leaders<00:01:52.971><c> in</c><00:01:53.161><c> ASICs</c><00:01:53.479><c>,</c><00:01:53.607><c> besides</c><00:01:54.115><c> Global</c>
+
+00:01:54.497 --> 00:01:54.560 align:start position:0%
+ leaders in ASICs, besides Global
+ 
+
+00:01:54.560 --> 00:01:56.786 align:start position:0%
+ leaders in ASICs, besides Global
+ Unichip<00:01:55.069><c> and</c><00:01:55.323><c> MediaTek</c><00:01:55.832><c>,</c><00:01:55.959><c> there</c><00:01:56.341><c> is</c><00:01:56.532><c> also</c>
+
+00:01:56.786 --> 00:01:56.850 align:start position:0%
+ Unichip and MediaTek, there is also
+ 
+
+00:01:56.850 --> 00:01:59.199 align:start position:0%
+ Unichip and MediaTek, there is also
+ Alchip-KY<00:01:57.485><c> (</c><00:01:57.549><c>3661</c><00:01:57.803><c>)</c><00:01:57.867><c>.</c><00:01:58.031><c> Its</c><00:01:58.290><c> main</c><00:01:58.615><c> client</c><00:01:59.069><c> is</c>
+
+00:01:59.199 --> 00:01:59.264 align:start position:0%
+ Alchip-KY (3661). Its main client is
+ 
+
+00:01:59.264 --> 00:02:01.667 align:start position:0%
+ Alchip-KY (3661). Its main client is
+ Amazon's<00:01:59.849><c> AWS</c><00:02:00.043><c>,</c><00:02:00.173><c> and</c><00:02:00.433><c> Amazon</c><00:02:00.887><c> has</c><00:02:01.147><c> invested</c>
+
+00:02:01.667 --> 00:02:01.732 align:start position:0%
+ Amazon's AWS, and Amazon has invested
+ 
+
+00:02:01.732 --> 00:02:04.004 align:start position:0%
+ Amazon's AWS, and Amazon has invested
+ in<00:02:01.926><c> Alchip-KY</c><00:02:02.576><c> twice</c><00:02:02.900><c>,</c><00:02:03.030><c> with</c><00:02:03.355><c> the</c><00:02:03.615><c> second</c>
+
+00:02:04.004 --> 00:02:04.069 align:start position:0%
+ in Alchip-KY twice, with the second
+ 
+
+00:02:04.069 --> 00:02:06.407 align:start position:0%
+ in Alchip-KY twice, with the second
+ investment<00:02:04.783><c> cost</c><00:02:05.108><c> exceeding</c><00:02:05.757><c> 4,200</c><00:02:06.147><c> NTD</c><00:02:06.342><c>.</c>
+
+00:02:06.407 --> 00:02:06.507 align:start position:0%
+ investment cost exceeding 4,200 NTD.
+ 
+
+00:02:06.507 --> 00:02:08.275 align:start position:0%
+ investment cost exceeding 4,200 NTD.
+ Looking<00:02:06.900><c> at</c><00:02:07.047><c> it</c><00:02:07.194><c> relatively</c><00:02:07.686><c>,</c><00:02:07.784><c> Alchip’s</c>
+
+00:02:08.275 --> 00:02:08.325 align:start position:0%
+ Looking at it relatively, Alchip’s
+ 
+
+00:02:08.325 --> 00:02:10.044 align:start position:0%
+ Looking at it relatively, Alchip’s
+ current<00:02:08.718><c> valuation</c><00:02:09.209><c> is</c><00:02:09.356><c> lower</c><00:02:09.602><c>,</c><00:02:09.700><c> and</c><00:02:09.897><c> its</c>
+
+00:02:10.044 --> 00:02:10.094 align:start position:0%
+ current valuation is lower, and its
+ 
+
+00:02:10.094 --> 00:02:11.764 align:start position:0%
+ current valuation is lower, and its
+ stock<00:02:10.388><c> price</c><00:02:10.683><c> is</c><00:02:10.831><c> even</c><00:02:11.076><c> below</c><00:02:11.371><c> Amazon's</c>
+
+00:02:11.764 --> 00:02:11.813 align:start position:0%
+ stock price is even below Amazon's
+ 
+
+00:02:11.813 --> 00:02:13.582 align:start position:0%
+ stock price is even below Amazon's
+ investment<00:02:12.354><c> cost</c><00:02:12.550><c>,</c><00:02:12.649><c> making</c><00:02:12.993><c> it</c><00:02:13.140><c> worth</c><00:02:13.435><c> the</c>
+
+00:02:13.582 --> 00:02:13.631 align:start position:0%
+ investment cost, making it worth the
+ 
+
+00:02:13.631 --> 00:02:15.400 align:start position:0%
+ investment cost, making it worth the
+ attention<00:02:14.123><c> of</c><00:02:14.270><c> investors</c><00:02:14.762><c> interested</c><00:02:15.302><c> in</c>
+
+00:02:15.400 --> 00:02:15.450 align:start position:0%
+ attention of investors interested in
+ 
+
+00:02:15.450 --> 00:02:17.214 align:start position:0%
+ attention of investors interested in
+ this<00:02:15.695><c> industry</c><00:02:16.088><c>.</c><00:02:16.238><c> Investors</c><00:02:16.702><c> may</c><00:02:16.888><c> want</c><00:02:17.121><c> to</c>
+
+00:02:17.214 --> 00:02:17.260 align:start position:0%
+ this industry. Investors may want to
+ 
+
+00:02:17.260 --> 00:02:18.701 align:start position:0%
+ this industry. Investors may want to
+ keep<00:02:17.492><c> an</c><00:02:17.632><c> eye</c><00:02:17.818><c> on</c><00:02:17.957><c> it</c><00:02:18.097><c> and</c><00:02:18.282><c> track</c><00:02:18.561><c> its</c>
+
+00:02:18.701 --> 00:02:18.747 align:start position:0%
+ keep an eye on it and track its
+ 
+
+00:02:18.747 --> 00:02:20.166 align:start position:0%
+ keep an eye on it and track its
+ progress<00:02:19.119><c>.</c>
+
