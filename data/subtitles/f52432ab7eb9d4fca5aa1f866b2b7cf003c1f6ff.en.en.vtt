@@ -1,0 +1,244 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.744 --> 00:00:02.484 align:start position:0%
+ 
+Raising<00:00:01.153><c> the</c><00:00:01.358><c> voltage</c><00:00:01.767><c> actually</c><00:00:02.228><c> keeps</c>
+
+00:00:02.484 --> 00:00:02.535 align:start position:0%
+Raising the voltage actually keeps
+ 
+
+00:00:02.535 --> 00:00:04.122 align:start position:0%
+Raising the voltage actually keeps
+ wires<00:00:02.842><c> from</c><00:00:03.098><c> heating</c><00:00:03.508><c> up</c><00:00:03.610><c>;</c><00:00:03.712><c> AI</c><00:00:03.866><c> is</c><00:00:04.019><c> so</c>
+
+00:00:04.122 --> 00:00:04.173 align:start position:0%
+ wires from heating up; AI is so
+ 
+
+00:00:04.173 --> 00:00:05.862 align:start position:0%
+ wires from heating up; AI is so
+ power-hungry<00:00:04.838><c> that</c><00:00:05.094><c> even</c><00:00:05.350><c> the</c><00:00:05.555><c> way</c><00:00:05.760><c> we</c>
+
+00:00:05.862 --> 00:00:05.913 align:start position:0%
+ power-hungry that even the way we
+ 
+
+00:00:05.913 --> 00:00:08.518 align:start position:0%
+ power-hungry that even the way we
+ deliver<00:00:06.323><c> electricity</c><00:00:06.937><c> has</c><00:00:07.142><c> to</c><00:00:07.295><c> change</c><00:00:07.602><c>.</c><00:00:08.418><c> To</c>
+
+00:00:08.518 --> 00:00:08.568 align:start position:0%
+ deliver electricity has to change. To
+ 
+
+00:00:08.568 --> 00:00:10.322 align:start position:0%
+ deliver electricity has to change. To
+ deliver<00:00:08.969><c> the</c><00:00:09.169><c> same</c><00:00:09.420><c> amount</c><00:00:09.770><c> of</c><00:00:09.921><c> power</c><00:00:10.171><c>,</c><00:00:10.271><c> a</c>
+
+00:00:10.322 --> 00:00:10.372 align:start position:0%
+ deliver the same amount of power, a
+ 
+
+00:00:10.372 --> 00:00:12.226 align:start position:0%
+ deliver the same amount of power, a
+ higher<00:00:10.722><c> voltage</c><00:00:11.123><c> requires</c><00:00:11.574><c> less</c><00:00:11.825><c> current</c><00:00:12.175><c>.</c>
+
+00:00:12.226 --> 00:00:13.178 align:start position:0%
+ higher voltage requires less current.
+ 
+
+00:00:13.178 --> 00:00:15.172 align:start position:0%
+ higher voltage requires less current.
+ With<00:00:13.433><c> less</c><00:00:13.689><c> current</c><00:00:14.047><c>,</c><00:00:14.149><c> power</c><00:00:14.456><c> wasted</c><00:00:14.814><c> as</c><00:00:14.967><c> heat</c>
+
+00:00:15.172 --> 00:00:15.223 align:start position:0%
+ With less current, power wasted as heat
+ 
+
+00:00:15.223 --> 00:00:17.850 align:start position:0%
+ With less current, power wasted as heat
+ in<00:00:15.377><c> the</c><00:00:15.581><c> wires</c><00:00:15.888><c> is</c><00:00:16.041><c> reduced</c><00:00:16.399><c>.</c><00:00:17.094><c> But</c><00:00:17.310><c> here's</c><00:00:17.688><c> the</c>
+
+00:00:17.850 --> 00:00:17.904 align:start position:0%
+ in the wires is reduced. But here's the
+ 
+
+00:00:17.904 --> 00:00:20.011 align:start position:0%
+ in the wires is reduced. But here's the
+ problem<00:00:18.282><c>:</c><00:00:18.390><c> 800</c><00:00:18.606><c> volts</c><00:00:18.930><c> is</c><00:00:19.092><c> good</c><00:00:19.363><c> for</c><00:00:19.579><c> delivery</c>
+
+00:00:20.011 --> 00:00:21.524 align:start position:0%
+ problem: 800 volts is good for delivery
+,<00:00:20.119><c> but</c><00:00:20.335><c> chips</c><00:00:20.659><c> can't</c><00:00:20.983><c> handle</c><00:00:21.361><c> it</c><00:00:21.469><c>.</c>
+
+00:00:21.524 --> 00:00:22.176 align:start position:0%
+, but chips can't handle it.
+ 
+
+00:00:22.176 --> 00:00:23.942 align:start position:0%
+, but chips can't handle it.
+ Electricity<00:00:22.748><c> arriving</c><00:00:23.178><c> near</c><00:00:23.417><c> a</c><00:00:23.512><c> chip</c><00:00:23.751><c> must</c>
+
+00:00:23.942 --> 00:00:23.990 align:start position:0%
+ Electricity arriving near a chip must
+ 
+
+00:00:23.990 --> 00:00:26.447 align:start position:0%
+ Electricity arriving near a chip must
+ be<00:00:24.133><c> stepped</c><00:00:24.515><c> down</c><00:00:24.706><c>.</c><00:00:25.136><c> One</c><00:00:25.374><c> method</c><00:00:25.791><c> is</c><00:00:25.970><c> a</c><00:00:26.090><c> phased</c>
+
+00:00:26.447 --> 00:00:26.507 align:start position:0%
+ be stepped down. One method is a phased
+ 
+
+00:00:26.507 --> 00:00:28.713 align:start position:0%
+ be stepped down. One method is a phased
+ reduction<00:00:27.044><c>:</c><00:00:27.163><c> first</c><00:00:27.521><c> to</c><00:00:27.700><c> 48</c><00:00:27.879><c> volts</c><00:00:28.177><c>,</c><00:00:28.296><c> then</c><00:00:28.594><c> to</c>
+
+00:00:28.713 --> 00:00:28.773 align:start position:0%
+ reduction: first to 48 volts, then to
+ 
+
+00:00:28.773 --> 00:00:31.099 align:start position:0%
+ reduction: first to 48 volts, then to
+ 12<00:00:28.892><c>,</c><00:00:29.012><c> and</c><00:00:29.250><c> finally</c><00:00:29.727><c> to</c><00:00:29.906><c> the</c><00:00:30.145><c> voltage</c><00:00:30.622><c> the</c><00:00:30.860><c> chip</c>
+
+00:00:31.099 --> 00:00:31.158 align:start position:0%
+ 12, and finally to the voltage the chip
+ 
+
+00:00:31.158 --> 00:00:33.288 align:start position:0%
+ 12, and finally to the voltage the chip
+ can<00:00:31.397><c> use</c><00:00:31.576><c>.</c><00:00:31.736><c> Renesas’s</c><00:00:32.356><c> new</c><00:00:32.563><c> design</c><00:00:32.925><c> aims</c><00:00:33.184><c> to</c>
+
+00:00:33.288 --> 00:00:33.339 align:start position:0%
+ can use. Renesas’s new design aims to
+ 
+
+00:00:33.339 --> 00:00:35.047 align:start position:0%
+ can use. Renesas’s new design aims to
+ shorten<00:00:33.753><c> these</c><00:00:34.064><c> intermediate</c><00:00:34.736><c> steps</c><00:00:34.995><c>,</c>
+
+00:00:35.047 --> 00:00:35.098 align:start position:0%
+ shorten these intermediate steps,
+ 
+
+00:00:35.098 --> 00:00:37.116 align:start position:0%
+ shorten these intermediate steps,
+ dropping<00:00:35.564><c> 800</c><00:00:35.771><c> volts</c><00:00:36.081><c> directly</c><00:00:36.547><c> to</c><00:00:36.702><c> 6</c><00:00:36.806><c> volts</c><00:00:37.064><c>,</c>
+
+00:00:37.116 --> 00:00:37.168 align:start position:0%
+ dropping 800 volts directly to 6 volts,
+ 
+
+00:00:37.168 --> 00:00:38.927 align:start position:0%
+ dropping 800 volts directly to 6 volts,
+ then<00:00:37.427><c> down</c><00:00:37.685><c> to</c><00:00:37.840><c> the</c><00:00:38.047><c> chip’s</c><00:00:38.513><c> required</c>
+
+00:00:38.927 --> 00:00:38.979 align:start position:0%
+ then down to the chip’s required
+ 
+
+00:00:38.979 --> 00:00:40.767 align:start position:0%
+ then down to the chip’s required
+ voltage<00:00:39.341><c>.</c><00:00:39.493><c> Fewer</c><00:00:39.787><c> conversions</c><00:00:40.375><c> mean</c><00:00:40.620><c> one</c>
+
+00:00:40.767 --> 00:00:40.816 align:start position:0%
+ voltage. Fewer conversions mean one
+ 
+
+00:00:40.816 --> 00:00:42.825 align:start position:0%
+ voltage. Fewer conversions mean one
+ less<00:00:41.061><c> source</c><00:00:41.404><c> of</c><00:00:41.551><c> power</c><00:00:41.845><c> loss</c><00:00:42.041><c>.</c><00:00:42.191><c> Renesas</c><00:00:42.613><c> uses</c>
+
+00:00:42.825 --> 00:00:42.878 align:start position:0%
+ less source of power loss. Renesas uses
+ 
+
+00:00:42.878 --> 00:00:44.834 align:start position:0%
+ less source of power loss. Renesas uses
+ a<00:00:42.983><c> next-generation</c><00:00:43.829><c> power</c><00:00:44.147><c> semiconductor</c>
+
+00:00:44.834 --> 00:00:44.887 align:start position:0%
+ a next-generation power semiconductor
+ 
+
+00:00:44.887 --> 00:00:46.843 align:start position:0%
+ a next-generation power semiconductor
+ called<00:00:45.257><c> gallium</c><00:00:45.680><c> nitride</c><00:00:46.103><c> for</c><00:00:46.314><c> this</c><00:00:46.578><c> step</c><00:00:46.790><c>,</c>
+
+00:00:46.843 --> 00:00:46.896 align:start position:0%
+ called gallium nitride for this step,
+ 
+
+00:00:46.896 --> 00:00:48.905 align:start position:0%
+ called gallium nitride for this step,
+ with<00:00:47.160><c> an</c><00:00:47.319><c> efficiency</c><00:00:47.900><c> target</c><00:00:48.270><c> of</c><00:00:48.429><c> over</c><00:00:48.693><c> 96</c><00:00:48.799><c>%</c><00:00:48.852><c>.</c>
+
+00:00:48.905 --> 00:00:49.005 align:start position:0%
+ with an efficiency target of over 96%.
+ 
+
+00:00:49.005 --> 00:00:50.525 align:start position:0%
+ with an efficiency target of over 96%.
+ This<00:00:49.228><c> 20</c><00:00:49.318><c>-</c><00:00:49.362><c>kilowatt</c><00:00:49.765><c> platform</c><00:00:50.167><c> has</c><00:00:50.346><c> been</c>
+
+00:00:50.525 --> 00:00:50.570 align:start position:0%
+ This 20-kilowatt platform has been
+ 
+
+00:00:50.570 --> 00:00:52.046 align:start position:0%
+ This 20-kilowatt platform has been
+ sampled<00:00:50.928><c> to</c><00:00:51.062><c> contract</c><00:00:51.464><c> manufacturers</c>
+
+00:00:52.046 --> 00:00:52.091 align:start position:0%
+ sampled to contract manufacturers
+ 
+
+00:00:52.091 --> 00:00:53.746 align:start position:0%
+ sampled to contract manufacturers
+ building<00:00:52.493><c> servers</c><00:00:52.851><c> for</c><00:00:53.030><c> cloud</c><00:00:53.298><c> providers</c><00:00:53.701><c>.</c>
+
+00:00:53.746 --> 00:00:53.846 align:start position:0%
+ building servers for cloud providers.
+ 
+
+00:00:53.846 --> 00:00:55.898 align:start position:0%
+ building servers for cloud providers.
+ It<00:00:53.991><c> is</c><00:00:54.137><c> still</c><00:00:54.428><c> under</c><00:00:54.719><c> verification</c><00:00:55.302><c>.</c><00:00:55.623><c> Delta</c>
+
+00:00:55.898 --> 00:00:55.953 align:start position:0%
+ It is still under verification. Delta
+ 
+
+00:00:55.953 --> 00:00:57.989 align:start position:0%
+ It is still under verification. Delta
+ Electronics<00:00:56.613><c> has</c><00:00:56.833><c> also</c><00:00:57.108><c> been</c><00:00:57.383><c> included</c><00:00:57.879><c> in</c>
+
+00:00:57.989 --> 00:00:58.044 align:start position:0%
+ Electronics has also been included in
+ 
+
+00:00:58.044 --> 00:01:00.135 align:start position:0%
+ Electronics has also been included in
+ the<00:00:58.264><c> 800</c><00:00:58.429><c>-</c><00:00:58.484><c>volt</c><00:00:58.759><c> power</c><00:00:59.089><c> delivery</c><00:00:59.584><c> ecosystem</c><00:01:00.079><c>.</c>
+
+00:01:00.135 --> 00:01:01.432 align:start position:0%
+ the 800-volt power delivery ecosystem.
+ 
+
+00:01:01.432 --> 00:01:03.273 align:start position:0%
+ 
+&gt;&gt; Storm<00:01:01.856><c> Media</c><00:01:02.210><c>:</c><00:01:02.352><c> Understanding</c>
+
+00:01:03.273 --> 00:01:03.343 align:start position:0%
+&gt;&gt; Storm Media: Understanding
+ 
+
+00:01:03.343 --> 00:01:05.406 align:start position:0%
+&gt;&gt; Storm Media: Understanding
+ Semiconductors<00:01:04.335><c>.</c>
+
