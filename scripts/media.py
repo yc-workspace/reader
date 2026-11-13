@@ -29,6 +29,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,17 +40,47 @@ import net
 import store
 import summarize
 import textproc
-from store import (BLANK_SUMMARY, UTC, choose_track, prune_subtitles, is_episode, is_pending, is_youtube, load_doc,
+from store import (youtube_watch_url, BLANK_SUMMARY, UTC, choose_track, prune_subtitles, is_episode, is_pending, is_youtube, load_doc,
                    next_data, safe_lang, save_doc, track_rank, valid_id, walk, write_atomic)
 
 # The JS challenge solver comes from the pinned yt-dlp-ejs package (yt-dlp[default]);
 # `--remote-components ejs:github` would run unpinned code fetched at runtime.
-BASE_ARGS = ["--user-agent", net.UA, "--no-progress", "--socket-timeout", "30"]
-SUB_ARGS = ["--extractor-args", "youtube:player_client=web", "--ignore-no-formats"]
-AUDIO_ARGS = ["--extractor-args", "youtube:player_client=tv,web_safari,default",
-              "-f", "bestaudio[abr<=64]/bestaudio/bestaudio*/best"]
+BASE_ARGS = ["--no-progress", "--socket-timeout", "30"]
+SUB_ARGS = ["--user-agent", net.UA, "--extractor-args", "youtube:player_client=web", "--ignore-no-formats"]
+# Ways to get a video's audio, tried in order until one downloads (youtube_audio).
+# A stream url that extracts fine can still be refused when fetched (HTTP 403),
+# and which player client and protocol YouTube refuses changes every few
+# months; yt-dlp never falls back to another format after a failed download.
+# So each row asks for a different source of the audio:
+#   default    yt-dlp's own client choice for a logged-in session (the part of
+#              yt-dlp that is updated when YouTube changes; naming clients
+#              here would freeze it at whatever worked when this was written)
+#   hls        the m3u8 playlists of the Safari web client: fetched from other
+#              urls, with other access checks, than the https formats
+#   premerged  format 18 (360p video+audio in one https file), the one https
+#              format served without a PO token; larger, still small enough
+#   tv         the TV client, which YouTube has served without a PO token
+# No --user-agent here: every client sends its own, and the stream is fetched
+# with yt-dlp's current browser one.
+AUDIO_LADDER = (
+    ("default", ["-f", "bestaudio[abr<=64]/bestaudio/bestaudio*/best"]),
+    ("hls", ["--extractor-args", "youtube:player_client=web_safari",
+             "-f", "bestaudio[protocol^=m3u8]/worst[protocol^=m3u8]"]),
+    ("premerged", ["-f", "18/worst[acodec!=none][vcodec!=none]"]),
+    ("tv", ["--extractor-args", "youtube:player_client=tv",
+            "-f", "bestaudio[abr<=64]/bestaudio/bestaudio*/best"]),
+)
+AUDIO_MIN_ATTEMPT = 45       # seconds: less than this left of the timeout starts no further attempt
+# live_status values whose video has no finished recording yet (a scheduled
+# stream or premiere, or one still on air): nothing to fetch -- no captions,
+# and the audio download fails ("Premieres in 31 hours") -- until it ends.
+NOT_YET_AVAILABLE = {"is_upcoming": "not yet premiered", "is_live": "still live"}
 EXHAUSTED_UNDER = 10 * 60    # remaining ASR budget too small for any real video
 PODCAST_MAX_BYTES = 512 * 1024 * 1024
+# Podcast CDNs can be slow from the runner: twice the time a YouTube download
+# of that length gets, at least 10 and at most 30 minutes (net.save resumes
+# broken transfers within it).
+PODCAST_PATIENCE, PODCAST_MIN_TIMEOUT, PODCAST_MAX_TIMEOUT = 2, 600, 1800
 
 
 @dataclass
@@ -63,6 +94,10 @@ class Limits:
     probe_timeout: float = 90
     download_timeout: float = 240
     audio_timeout: float = 300
+    # Wall clock after which no further ASR job starts (the rest stay
+    # pending): the job is killed at timeout-minutes (340) and a killed job
+    # commits nothing, so slow or failing downloads must not run it out.
+    max_run: float = 270 * 60
     whisper_model: str = store.Config.whisper_model
     whisper_compute_type: str = store.Config.whisper_compute_type
     no_transcribe: bool = False
@@ -135,10 +170,13 @@ def run_cmd(cmd: list[str], timeout: float) -> tuple[int | None, str, str]:
 
 
 def ytdlp(cookies: Path | None, url: str | None, *args) -> list[str]:
-    """`--` ends option parsing: a url can never be read as a flag. url=None
-    for --load-info-json runs (the video comes from the info file)."""
+    """`--` ends option parsing: a url can never be read as a flag. The url
+    yt-dlp gets is rebuilt from the validated video id, so it names exactly
+    one video (a stored `?list=` would expand into the whole playlist and
+    probe every entry until the timeout). url=None for --load-info-json runs
+    (the video comes from the info file)."""
     auth = ["--cookies", str(cookies)] if cookies else []
-    return ["yt-dlp", *auth, *BASE_ARGS, *args, *(["--", url] if url else [])]
+    return ["yt-dlp", *auth, *BASE_ARGS, *args, *(["--", youtube_watch_url(url)] if url else [])]
 
 
 # yt-dlp's own words when the account cookies are refused. Narrow on purpose:
@@ -148,10 +186,42 @@ COOKIES_REJECTED = re.compile(r"cookies (?:are|is) no longer valid|cookies? (?:h
                               r"|sign in to confirm you(?:'|’)?re not a bot", re.I)
 
 
+# yt-dlp's own words for a video our account may never open: it belongs to
+# the channel's members. A fact about the video (BLANK), not about this run,
+# so it is not retried daily. Only ERROR lines of stderr, as for cookies:
+# stdout carries remote metadata (a title could say anything).
+RESTRICTED = (
+    ("members only", re.compile(r"^ERROR: \[youtube\] [\w-]+: (?:This video is available to this channel's members"
+                                r"|Join this channel to get access to members-only content)", re.M)),
+    # The runner's country is not ours to choose (GitHub-hosted), so for this
+    # project a geo-block is as final as a membership wall.
+    ("not available in the runner's country",
+     re.compile(r"^ERROR: \[youtube\] [\w-]+: The uploader has not made this video available in your country", re.M)),
+)
+
+
+def restricted(stderr: str) -> str | None:
+    """Why the video is closed to us for good, or None."""
+    return next((why for why, rx in RESTRICTED if rx.search(stderr or "")), None)
+
+
+class Restricted(RuntimeError):
+    """The video is closed to our account (members only): a fact about the item."""
+
+
 def cookies_rejected(stderr: str) -> bool:
     """Only yt-dlp's own diagnostics: stdout carries remote metadata, and a
     video titled "cookies are no longer valid" must not end the run."""
     return bool(COOKIES_REJECTED.search(stderr or ""))
+
+
+def why_failed(stderr: str, limit: int = 300) -> str:
+    """yt-dlp's reason in one short line: its ERROR lines (the first words of
+    each; a geo-block error goes on to list every country), else the end of
+    stderr. Only stderr, as for cookies_rejected."""
+    lines = [l.strip() for l in (stderr or "").splitlines() if l.strip()]
+    errors = [l for l in lines if l.startswith("ERROR:")] or lines[-2:]
+    return " / ".join(l if len(l) <= limit else l[:limit] + "..." for l in errors) or "no output"
 
 
 def discard(out_dir: Path, item_id: str) -> list[str]:
@@ -194,20 +264,25 @@ def to_vtt(segments) -> str:
 # Podcast episode pages -> their audio file (mp3 / m4a), for ASR.
 #
 # 小宇宙  www.xiaoyuzhoufm.com/episode/<id>   og:audio (.m4a) in the page
-# Firstory open.firstory.fm|me/story/<id>     an audio url in the page, else the
-#                                              <enclosure> of the show's RSS
-#                                              (feed.firstory.me/rss/user/<uid>),
-#                                              which the page links
+# Firstory open.firstory.fm|me/story/<id>     the episode's entry in the show's
+#                                              RSS (feed.firstory.me/rss/user/<uid>,
+#                                              linked from the page): enclosure and
+#                                              itunes:duration; else an audio url in
+#                                              the page, duration unknown
+#
+# Duration only ever comes from a field that means duration (__NEXT_DATA__
+# `duration`, itunes:duration) or from the audio itself: the clock times a
+# page shows are publish times. Whatever the page said, the length stored
+# after ASR is the measured audio length.
 #
 # Only the episode page and the feed it names are fetched. The audio url is
 # remote data: resolve_episode requires public addresses, and the audio is
-# fetched through net.download, which re-checks every hop.
+# fetched through net.save, which re-checks every hop.
 AUDIO_EXT = (".mp3", ".m4a", ".aac")
 OG_AUDIO_KEYS = ("og:audio", "og:audio:url", "og:audio:secure_url")
 _TOKEN_SPLIT = re.compile(r"""[\s"'<>\\]+""")
 FIRSTORY_RSS_RE = re.compile(r"https?://feed\.firstory\.me/rss/user/[0-9a-z]{10,40}", re.I)
 MINUTES_RE = re.compile(r"(\d{1,4})\s*分钟")
-HMS_RE = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2}):(\d{2})(?![\d:])")
 POD_TIMEOUT = 35
 POD_LANG = "zh-CN,zh-TW;q=0.9,en;q=0.8"
 
@@ -285,13 +360,10 @@ def _xiaoyuzhou(url: str, eid: str) -> Episode | None:
     return Episode(audio, duration, "zh")
 
 
-def _firstory(url: str, sid: str) -> Episode | None:
-    page = _pod_get(url)
-    duration = 0.0
-    if m := HMS_RE.search(re.sub(r"<[^<>]*+>", " ", page)):      # "2024-06-04 00:43:08"
-        duration = hms(m[0])
-    if audio := _audio_in_page(page):
-        return Episode(audio, duration, "zh")
+def _firstory_entry(page: str, sid: str) -> Episode | None:
+    """The episode's <enclosure> and itunes:duration in the show's RSS, or
+    None when the page names no feed or the feed has no audio for `sid`.
+    Raises EpisodeUnreachable when the feed cannot be read."""
     feed = FIRSTORY_RSS_RE.search(page)
     if not feed:
         return None
@@ -304,8 +376,23 @@ def _firstory(url: str, sid: str) -> Episode | None:
         for l in list(e.get("enclosures", [])) + list(e.get("links", [])):
             href = l.get("href") or l.get("url") or ""
             if href and (str(l.get("type", "")).startswith("audio") or is_audio_url(href)):
-                return Episode(href, hms(e.get("itunes_duration")) or duration, "zh")
+                return Episode(href, hms(e.get("itunes_duration")), "zh")
     return None
+
+
+def _firstory(url: str, sid: str) -> Episode | None:
+    """The RSS entry first (it is the only source of the duration); the
+    page's own audio url when the feed is missing, unreadable or lacks the
+    episode -- then the duration is unknown and the audio measures it."""
+    page = _pod_get(url)
+    audio = _audio_in_page(page)
+    try:
+        if ep := _firstory_entry(page, sid):
+            return ep
+    except EpisodeUnreachable:
+        if not audio:
+            raise
+    return Episode(audio, 0.0, "zh") if audio else None
 
 
 def resolve_episode(url: str) -> Episode | None:
@@ -356,29 +443,50 @@ def transcribe(fetch, out_dir: Path, item_id, orig, a, duration) -> tuple[Path, 
         raise NoSpeech("no speech segments")
     path = out_dir / f"{item_id}.{safe_lang(orig, detected)}.{detected}.vtt"
     path.write_text(vtt, encoding="utf-8")
-    return path, float(info.duration or duration or 0)
+    return path, float(info.duration or 0)
 
 
 def youtube_audio(cookies: Path, url: str):
+    """The audio by the first way in AUDIO_LADDER that downloads. `timeout`
+    covers all attempts together. The ladder stops early for what no other
+    way can change: the video is closed to us (Restricted), the cookies were
+    refused, or the time is up."""
     def fetch(d: Path, timeout: float) -> Path:
-        rc, out, err = run_cmd(ytdlp(cookies, url, *AUDIO_ARGS, "-o", f"{d}/audio.%(ext)s"), timeout)
-        files = sorted(p for p in d.glob("audio.*") if p.suffix != ".part")
-        if rc is None:
-            raise RuntimeError(f"audio download timed out after {timeout:.0f}s")
-        if rc != 0 or not files:
-            raise RuntimeError(f"audio download failed: {(out + err).strip()[-1500:]}")
-        return files[0]
+        deadline, tried = time.monotonic() + timeout, []
+        for name, args in AUDIO_LADDER:
+            left = deadline - time.monotonic()
+            if tried and left < AUDIO_MIN_ATTEMPT:
+                break
+            for p in d.glob("audio.*"):          # what a failed attempt left behind
+                p.unlink(missing_ok=True)
+            rc, out, err = run_cmd(ytdlp(cookies, url, *args, "-o", f"{d}/audio.%(ext)s"), left)
+            if why := restricted(err):
+                raise Restricted(why)
+            files = sorted(p for p in d.glob("audio.*") if p.suffix not in (".part", ".ytdl"))
+            if rc == 0 and files:
+                if tried:
+                    print(f"[AUDIO] {name} worked after: {'; '.join(tried)}")
+                return files[0]
+            if rc is None:
+                tried.append(f"{name}: timed out")
+                break
+            tried.append(f"{name}: {why_failed(err)}")
+            if cookies_rejected(err):
+                break
+        raise RuntimeError("audio download failed: " + "; ".join(tried))
     return fetch
 
 
 def direct_audio(url: str):
-    """A podcast file, through net.download: every redirect hop and every
-    connection is held to public addresses, unlike a yt-dlp download."""
+    """A podcast file, through net.save: every redirect hop and every
+    connection is held to public addresses, unlike a yt-dlp download; a
+    broken transfer is resumed, and a failure says why."""
     def fetch(d: Path, timeout: float) -> Path:
         ext = Path(url.split("?", 1)[0]).suffix.lower()
         dest = d / ("audio" + (ext if ext in (".mp3", ".m4a", ".aac") else ".bin"))
-        if not net.download(url, dest, timeout, PODCAST_MAX_BYTES):
-            raise RuntimeError("audio download failed, timed out or too large")
+        timeout = min(max(timeout * PODCAST_PATIENCE, PODCAST_MIN_TIMEOUT), PODCAST_MAX_TIMEOUT)
+        if why := net.save(url, dest, timeout, PODCAST_MAX_BYTES):
+            raise RuntimeError(f"audio download failed: {why}")
         return dest
     return fetch
 
@@ -386,6 +494,7 @@ def direct_audio(url: str):
 class Budget:
     def __init__(self, a):
         self.a, self.count, self.spent, self.hit_wall = a, 0, 0.0, False
+        self.started = time.monotonic()
 
     def left(self) -> float:
         return self.a.max_asr_total - self.spent if self.a.max_asr_total else float("inf")
@@ -394,7 +503,7 @@ class Budget:
         """Turned something away for budget, and what's left fits no video."""
         return self.hit_wall and self.left() <= EXHAUSTED_UNDER
 
-    def refuse(self, duration, live) -> tuple[str, bool] | None:
+    def refuse(self, duration) -> tuple[str, bool] | None:
         """(reason, permanent). Only the video's own length is permanent; the
         rest is about this run and must leave the item pending."""
         a = self.a
@@ -402,10 +511,10 @@ class Budget:
             return "transcription disabled", False
         if importlib.util.find_spec("faster_whisper") is None:
             return "faster-whisper not installed", False
-        if live:
-            return "still live", False
         if a.max_transcribe and self.count >= a.max_transcribe:
             return "per-run item cap reached", False
+        if (limit := getattr(a, "max_run", 0)) and time.monotonic() - self.started > limit:
+            return f"run time limit reached ({limit / 60:.0f} min)", False
         if a.max_asr_duration and duration > a.max_asr_duration:
             return f"{duration / 60:.0f} min > {a.max_asr_duration / 60:.0f} min cap", True
         if a.max_asr_total and duration > self.left():
@@ -418,12 +527,13 @@ class Budget:
             f"/{self.a.max_asr_total / 60:.0f}min" if self.a.max_asr_total else "")
 
 
-def asr(item, orig, duration, live, a, budget, out_dir, n, fetch, is_podcast=False) -> bool:
-    """Returns whether the item changed. Only the item's own nature ends it
-    (BLANK): no speech, or -- for a video -- longer than the cap. A podcast
+def asr(item, orig, duration, a, budget, out_dir, n, fetch, is_podcast=False) -> bool:
+    """Returns whether the item changed (a blank summary, or the length
+    measured from the transcribed audio). Only the item's own nature ends it
+    (BLANK): no speech, members only, or -- for a video -- longer than the cap. A podcast
     over the cap, and every run-level failure, stays pending."""
     item_id = item["id"]
-    refused = budget.refuse(duration, live)
+    refused = budget.refuse(duration)
     if refused:
         why, permanent = refused
         blank = permanent and not is_podcast
@@ -436,9 +546,13 @@ def asr(item, orig, duration, live, a, budget, out_dir, n, fetch, is_podcast=Fal
             n["succeeded"] += 1
             prune_subtitles(out_dir, item_id)
             print(f"[ASR] {item_id}: {path.name} ({(secs or duration) / 60:.0f}min, {budget})")
+            # The decoded audio is the ground truth for the length shown.
+            if secs and item.get("length") != int(secs):
+                item["length"] = int(secs)
+                return True
             return False
         except Exception as e:
-            blank = isinstance(e, NoSpeech) or (isinstance(e, TooLong) and not is_podcast)
+            blank = isinstance(e, (NoSpeech, Restricted)) or (isinstance(e, TooLong) and not is_podcast)
             print(f"[ASR-FAILED] {item_id}: {type(e).__name__}: {e}" + ("" if blank else " (kept pending)"))
         discard(out_dir, item_id)
     if blank:
@@ -447,6 +561,18 @@ def asr(item, orig, duration, live, a, budget, out_dir, n, fetch, is_podcast=Fal
         return True
     n["deferred"] += 1
     return False
+
+
+def closed(item, item_id, err, out_dir, n) -> bool:
+    """True (item blanked) when yt-dlp's stderr says the video is closed to
+    our account for good; one rule for the probe and the track download."""
+    why = restricted(err)
+    if why:
+        discard(out_dir, item_id)
+        item["summary"] = BLANK_SUMMARY
+        n["no_subs"] += 1
+        print(f"[RESTRICTED] {item_id}: {why} -> blank")
+    return bool(why)
 
 
 def podcast_asr(item, a, budget, out_dir, n) -> bool:
@@ -468,7 +594,7 @@ def podcast_asr(item, a, budget, out_dir, n) -> bool:
         item["length"] = int(ep.duration)          # stored for the frontend
         dirty = True
     print(f"[PODCAST] {item_id}: {ep.audio_url} ({ep.duration / 60:.0f}min)")
-    return asr(item, ep.lang, ep.duration, False, a, budget, out_dir, n,
+    return asr(item, ep.lang, ep.duration, a, budget, out_dir, n,
                direct_audio(ep.audio_url), is_podcast=True) or dirty
 
 
@@ -548,19 +674,28 @@ def main(argv=None, limits: Limits | None = None) -> int:
         except Exception:
             info = None
         if not isinstance(info, dict):
+            if closed(item, item_id, err, out_dir, n):
+                dirty = True
+                continue
             n["failed"] += 1
-            print(f"[FAILED] {item_id}: probe failed")
+            print(f"[FAILED] {item_id}: probe failed (exit {rc}): {why_failed(err)}")
+            continue
+        # Before anything else: an upcoming or live video has no recording
+        # to caption or transcribe, and its duration is not the video's yet.
+        status = "is_live" if info.get("is_live") else str(info.get("live_status") or "")
+        if why := NOT_YET_AVAILABLE.get(status):
+            n["deferred"] += 1
+            print(f"[WAIT] {item_id}: {why} (kept pending)")
             continue
         orig = safe_lang(info.get("language"), None) if info.get("language") else None
         try:
             duration = max(float(info.get("duration") or 0), 0.0)
         except (TypeError, ValueError):
             duration = 0.0
-        live = bool(info.get("is_live") or info.get("live_status") == "is_live")
         if duration and item.get("length") != int(duration):
             item["length"] = int(duration)          # stored for the frontend
             dirty = True
-        fallback = lambda: asr(item, orig, duration, live, a, budget, out_dir, n, youtube_audio(cookies, url))
+        fallback = lambda: asr(item, orig, duration, a, budget, out_dir, n, youtube_audio(cookies, url))
 
         # track keys come from remote metadata and become a --sub-langs regex
         tracks = [{k: v for k, v in (info.get(f) or {}).items() if safe_lang(k, None)}
@@ -592,9 +727,11 @@ def main(argv=None, limits: Limits | None = None) -> int:
             prune_subtitles(out_dir, item_id)
         elif rc == 0 and "no subtitles for the requested languages" in log:
             dirty |= fallback()
+        elif closed(item, item_id, err, out_dir, n):
+            dirty = True
         else:
             n["failed"] += 1
-            print(f"[FAILED] {item_id} (exit {rc}): {(out + err)[-1500:]}")
+            print(f"[FAILED] {item_id} (exit {rc}): {why_failed(err)}")
 
     # No YouTube video was probed (podcasts use no cookies): leave the flag alone.
     if cookies_expired or n["probed"]:

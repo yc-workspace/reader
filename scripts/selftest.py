@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline contract checks; CI runs this before touching any data. Each check
-pins one behaviour that keeps a known failure out (see ARCHITECTURE.md)."""
+pins one behaviour that keeps a known failure out; CONTRACTS lists them.
+Reads only scripts/: CI never depends on ARCHITECTURE.md."""
 
 from __future__ import annotations
 
@@ -134,10 +135,9 @@ def check_vtt_and_process():
         a = types.SimpleNamespace(no_transcribe=False, max_transcribe=0, max_asr_duration=3600,
                                   max_asr_total=7200)
         b = ds.Budget(a)
-        eq(b.refuse(4000, False)[1], True, "too long for ASR is permanent")
-        eq(b.refuse(100, True)[1], False, "live is not permanent")
+        eq(b.refuse(4000)[1], True, "too long for ASR is permanent")
         b.spent = 7000
-        eq((b.refuse(1000, False)[1], b.stop()), (False, True), "budget wall is not permanent; stops run")
+        eq((b.refuse(1000)[1], b.stop()), (False, True), "budget wall is not permanent; stops run")
     finally:
         importlib.util.find_spec = real
 
@@ -382,6 +382,10 @@ def check_encoding():
     decode as Chinese: guessed from the prefix alone it reads as cp1256, and
     that mojibake would be 'translated' into nonsense and stored as its
     summary."""
+    # The input gate itself: replacement characters left by a lossy decode.
+    zh = "研究人員在烏克蘭南部發掘一座古墓，出土大量青銅器與陶器。"
+    eq((textproc.garbled(zh + "\ufffd" * 10 + zh), textproc.garbled(zh * 2)), (True, False),
+       "garbled: U+FFFD residue is refused, clean text passes")
     zh = "考古學家發現一座擁有兩百年歷史的古墓。" * 4
     page = ("<script>" + "x" * 250_000 + "</script><p>" + zh + "</p>").encode()
     eq(zh in net.decode_body(page, {}), True, "utf-8 past a long ascii prefix")
@@ -669,13 +673,15 @@ def check_child_env():
     """yt-dlp children never see secrets."""
     old = dict(os.environ)
     os.environ.update({"DEEPL_API_KEY": "k", "FOLLOW_OPML_B64": "o", "GITHUB_TOKEN": "t", "YT_COOKIES": "c",
-                       "HF_HOME": "/hf", "KEEP_ME": "1"})
+                       "HF_HOME": "/hf", "KEEP_ME": "1",
+                       # allowlisted names that still carry secrets: the second filter's job
+                       "DENO_AUTH_TOKENS": "d", "XDG_SECRET_DIR": "x"})
     try:
         rc, out, _ = ds.run_cmd(["sh", "-c", "env"], 30)
     finally:
         os.environ.clear()
         os.environ.update(old)
-    eq((rc, "HF_HOME=/hf" in out and "PATH=" in out, "KEEP_ME" in out, [k for k in ("DEEPL", "OPML", "TOKEN", "YT_COOKIES") if k in out]), (0, True, False, []),
+    eq((rc, "HF_HOME=/hf" in out and "PATH=" in out, "KEEP_ME" in out, [k for k in ("DEEPL", "OPML", "TOKEN", "YT_COOKIES", "XDG_SECRET") if k in out]), (0, True, False, []),
        "subprocess env: allowlist only, no secrets")
 
 
@@ -764,8 +770,13 @@ def check_security():
        [True, False, False, False], "item ids are sha1 hex only")
     eq([store.safe_lang(x) for x in ("zh-Hant", "en", "../../x", "", ".*", None)],
        ["zh-Hant", "en", "und", "und", "und", "und"], "language codes fit for filenames")
-    cmd = ds.ytdlp(Path("c"), "--exec=rm -rf ~", "--skip-download")
-    eq(cmd[-2:], ["--", "--exec=rm -rf ~"], "url passed after --")
+    cmd = ds.ytdlp(Path("c"), "https://youtu.be/pInMVyeh6jY?list=PLW4nBexRDfRWS3QimUkgp2H2tvKWQxgBW", "--skip-download")
+    eq(cmd[-2:], ["--", "https://www.youtube.com/watch?v=pInMVyeh6jY"], "url after --, one video, no playlist")
+    try:
+        ds.ytdlp(Path("c"), "--exec=rm -rf ~", "--skip-download")
+        eq(False, True, "a non-video string never reaches yt-dlp")
+    except ValueError:
+        pass
     arch = {}
     un.ingest(arch, [un.Raw("c", "s", "t", u, None) for u in ("javascript:alert(1)", "httpx://a", "https://ok.example/a")],
               un.parse_date("2026-01-01"))
@@ -1043,6 +1054,99 @@ def check_podcast():
     eq(summarize.route(dict(ep, feed_content="show notes " * 50)), None, "podcast never falls back to show notes")
 
 
+def check_firstory_duration():
+    """The page's clock times are publish times, never the length: duration
+    comes from itunes:duration, else it is unknown (the audio measures it)."""
+    sid = "clwysgs8128dq01uk5tt621ha"
+    url = f"https://open.firstory.fm/story/{sid}"
+    feed_url = "https://feed.firstory.me/rss/user/ckabcdefghij0123456789"
+    page = (f'<span>2024-06-04 14:23:08</span><a href="{feed_url}">RSS</a>'
+            '{"audio":"https:\\/\\/cdn.firstory.me\\/a.mp3"}')
+    rss = (f'<?xml version="1.0"?><rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>'
+           f'<item><guid>{sid}</guid><link>{url}</link><itunes:duration>00:43:08</itunes:duration>'
+           f'<enclosure url="https://cdn.firstory.me/a.mp3" type="audio/mpeg" length="1"/></item>'
+           f'</channel></rss>').encode()
+    real_get = net.get
+    try:
+        net.get = lambda u, *a, **k: net.Resp(200, rss if u == feed_url else page.encode(), {}, u)
+        ep = ds._firstory(url, sid)
+        eq((ep.audio_url, ep.duration), ("https://cdn.firstory.me/a.mp3", 2588.0), "firstory: itunes:duration, not the publish time")
+        net.get = lambda u, *a, **k: (net.Resp(503, b"", {}, u) if u == feed_url else net.Resp(200, page.encode(), {}, u))
+        ep = ds._firstory(url, sid)
+        eq((ep.audio_url, ep.duration), ("https://cdn.firstory.me/a.mp3", 0.0), "firstory: feed down -> page audio, duration unknown")
+        net.get = lambda u, *a, **k: (net.Resp(503, b"", {}, u) if u == feed_url
+                                      else net.Resp(200, f'<a href="{feed_url}">RSS</a>'.encode(), {}, u))
+        try:
+            ds._firstory(url, sid)
+            eq(False, True, "firstory: feed down, no page audio -> unreachable")
+        except ds.EpisodeUnreachable:
+            pass
+    finally:
+        net.get = real_get
+    # A successful ASR stores the measured length, whatever the page claimed.
+    class A:
+        no_transcribe, max_transcribe, max_asr_duration, max_asr_total = False, 0, 0, 0
+    real_t, real_spec = ds.transcribe, ds.importlib.util.find_spec
+    try:
+        ds.transcribe = lambda *a, **k: (Path("x.vtt"), 2588.4)
+        ds.importlib.util.find_spec = lambda name: object()
+        ds.prune_subtitles = (lambda f: (lambda *a: []))(ds.prune_subtitles)
+        it = {"id": "f" * 40, "url": url, "length": 51788}
+        changed = ds.asr(it, "zh", 51788, A, ds.Budget(A), Path("."),
+                         __import__("collections").Counter(), None, is_podcast=True)
+        eq((changed, it["length"]), (True, 2588), "asr: measured audio length overwrites the estimate")
+    finally:
+        ds.transcribe, ds.importlib.util.find_spec = real_t, real_spec
+        ds.prune_subtitles = store.prune_subtitles
+
+
+def check_not_yet_available():
+    """A premiere or a live stream is probed but never captioned, transcribed
+    or given a length: it waits, untouched, until the recording exists."""
+    with tempfile.TemporaryDirectory() as d:
+        archive = Path(d) / "archive.json"
+        item = {"id": "a" * 40, "title": "t", "source": "s", "category": "c",
+                "url": "https://www.youtube.com/watch?v=040kHBjrWOk"}
+        for info in ({"live_status": "is_upcoming", "duration": 0, "automatic_captions": {"en": {}}},
+                     {"is_live": True, "live_status": "is_live", "duration": 5000}):
+            archive.write_text(json.dumps({"items": [item]}))
+            calls = []
+            real_run, real_asr = ds.run_cmd, ds.asr
+            ds.run_cmd = lambda cmd, t, info=info: (calls.append(cmd) or (0, json.dumps(info), ""))
+            ds.asr = lambda *a, **k: calls.append("asr") or False
+            try:
+                subs(archive, d, "--no-summarize")
+            finally:
+                ds.run_cmd, ds.asr = real_run, real_asr
+            got = json.loads(archive.read_text())["items"][0]
+            eq((len(calls), "summary" in got, "length" in got), (1, False, False),
+               f"{info['live_status']}: probe only, kept pending")
+
+
+def check_youtube_video_url():
+    """Only a YouTube *video* goes to media, and yt-dlp is given exactly that
+    one video: a stored `?list=` once made the probe walk the whole playlist
+    until it timed out. The stored url drops playlist and share parameters."""
+    vid = "pInMVyeh6jY"
+    for u, want in ((f"https://youtu.be/{vid}?list=PLW4nBexRDfRWS3QimUkgp2H2tvKWQxgBW", vid),
+                    (f"https://www.youtube.com/watch?v={vid}&list=PLx&index=3", vid),
+                    (f"https://m.youtube.com/shorts/{vid}?si=abc", vid),
+                    ("https://www.youtube.com/playlist?list=PLx", None),
+                    ("https://www.youtube.com/@npr", None),
+                    ("https://www.youtube.com/watch?v=short", None),
+                    ("https://notyoutube.com/watch?v=pInMVyeh6jY", None)):
+        eq(store.youtube_video_id(u), want, f"video id of {u}")
+    eq(ds.ytdlp(None, f"https://youtu.be/{vid}?list=PLx", "--dump-json")[-1],
+       f"https://www.youtube.com/watch?v={vid}", "yt-dlp gets one video")
+    eq([un.canonical_url(u) for u in (f"https://youtu.be/{vid}?list=PLx&si=q",
+                                      f"https://www.youtube.com/watch?v={vid}&list=PLx&t=42s",
+                                      f"https://www.youtube.com/shorts/{vid}?feature=share",
+                                      "https://www.youtube.com/playlist?list=PLx")],
+       [f"https://youtu.be/{vid}", f"https://www.youtube.com/watch?v={vid}",
+        f"https://www.youtube.com/shorts/{vid}", "https://www.youtube.com/playlist?list=PLx"],
+       "stored YouTube video urls carry no playlist")
+
+
 def check_status_ignores_podcasts():
     """A run that only handled podcasts says nothing about the YouTube cookies."""
     with tempfile.TemporaryDirectory() as d:
@@ -1141,7 +1245,7 @@ def check_asr_permanence():
             ds.transcribe = boom
             it, n = {"id": "a" * 40}, __import__("collections").Counter()
             with tempfile.TemporaryDirectory() as d:
-                ds.asr(it, None, 60, False, a, ds.Budget(a), Path(d), n, None, is_podcast=podcast_)
+                ds.asr(it, None, 60, a, ds.Budget(a), Path(d), n, None, is_podcast=podcast_)
             eq(it.get("summary"), want, f"asr: {type(exc).__name__} podcast={podcast_}")
     finally:
         ds.transcribe, importlib.util.find_spec = real_t, real_spec
@@ -1157,6 +1261,7 @@ def check_download_guard():
 
         def fake_once(method, url, ips, deadline, sink, limit, **kw):
             status, chunks, headers = replies.pop(0)
+            kw["on_status"](status)
             total = 0
             for c in chunks:
                 total += len(c)
@@ -1178,8 +1283,205 @@ def check_download_guard():
             replies = [(302, [b"moved"], {"location": "https://1.1.1.1/b.mp3"}), (200, [b"ab", b"cd"], {})]
             eq((net.download("https://1.1.1.1/a.mp3", dest, 5, 1000), dest.read_bytes()), (True, b"abcd"),
                "download: body of the final hop only")
+            replies = [(302, [], {"location": "http://10.0.0.1/x.mp3"})]
+            eq(net.save("https://1.1.1.1/a.mp3", dest, 5, 1000), "refused: redirect to a non-public address",
+               "save: says why")
+            replies = [(404, [b"nope"], {})]
+            eq(net.save("https://1.1.1.1/a.mp3", dest, 5, 1000), "HTTP 404", "save: the status is the reason")
+            replies = [(200, [b"x" * 600, b"x" * 600], {})]
+            eq(net.save("https://1.1.1.1/a.mp3", dest, 5, 1000), "larger than 0 MB", "save: over the cap")
         finally:
             net._once = real
+
+
+def check_download_resume():
+    """net.save against a local server that breaks transfers the way a far
+    CDN does: the connection drops part-way (resumed with Range, the file is
+    whole), the server ignores Range (the file starts over, never doubled),
+    it stalls (dropped after DOWNLOAD_STALL, resumed), or it refuses a plain
+    client (one more attempt with the browser fingerprint). A download that
+    cannot finish says why and leaves no file."""
+    import http.server, threading
+    body = bytes(range(256)) * 1200             # 307200 bytes, every offset distinguishable
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def handle(self):
+            with contextlib.suppress(OSError):
+                super().handle()
+
+        def do_GET(self):
+            rng = self.headers.get("Range")
+            seen.append((self.path, rng, self.headers.get("User-Agent")))
+            start = int(rng[6:-1]) if rng and self.path != "/norange" else 0
+            if self.path == "/blocked" and self.headers.get("User-Agent") == net.UA:
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if self.path == "/gone":
+                self.send_response(410)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(206 if start else 200)
+            self.send_header("Content-Length", str(len(body) - start))
+            if start:
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+            self.end_headers()
+            n = sum(1 for path, *_ in seen if path == self.path)
+            if self.path in ("/drop", "/norange") and n <= 2:      # two broken transfers, then a whole one
+                self.wfile.write(body[start:start + 100_000])
+                self.wfile.flush()
+                self.connection.shutdown(2)
+            elif self.path == "/stall" and n == 1:
+                self.wfile.write(body[:50_000])
+                self.wfile.flush()
+                time.sleep(15)
+            elif self.path == "/never":
+                self.wfile.write(body[start:start + 10])
+                self.wfile.flush()
+                self.connection.shutdown(2)
+            else:
+                self.wfile.write(body[start:])
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://t.test:{srv.server_address[1]}"
+    real, real_stall, real_sleep = net.public_addrs, net.DOWNLOAD_STALL, net.time.sleep
+    net.public_addrs = lambda h, p: ["127.0.0.1"] if h == "t.test" else real(h, p)
+    net.DOWNLOAD_STALL = 1
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            dest = Path(d) / "a.m4a"
+            eq((net.save(base + "/drop", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
+               "dropped connections are resumed into a whole file")
+            eq([r for path, r, _ in seen if path == "/drop"], [None, "bytes=100000-", "bytes=200000-"],
+               "each resume asks for the bytes after those on disk")
+            eq((net.save(base + "/norange", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
+               "a server that ignores Range: the file starts over, not appended to")
+            t0 = time.monotonic()
+            eq((net.save(base + "/stall", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
+               "a stalled connection is dropped and resumed")
+            took = time.monotonic() - t0
+            eq(took < 12, True, f"the stall is cut before the server wakes up: {took:.1f}s")
+            eq((net.save(base + "/blocked", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
+               "refused as a plain client: fetched with the browser fingerprint")
+            eq((net.save(base + "/gone", dest, 30, 10**6), dest.exists()), ("HTTP 410", False),
+               "a final status is the reason, no file left")
+            why = net.save(base + "/never", dest, 3, 10**6)
+            eq((why.startswith("timed out after 3s (0.0 MB in "), dest.exists()), (True, False),
+               f"out of time says so, with the progress made: {why}")
+            net.time.sleep = lambda s: None
+            n0 = len(seen)
+            net.DOWNLOAD_TRIES, tries = 3, net.DOWNLOAD_TRIES
+            try:
+                why = net.save(f"http://t.test:1/closed", dest, 30, 10**6)
+            finally:
+                net.DOWNLOAD_TRIES = tries
+            eq((why.startswith("gave up after 3 attempts without progress"), dest.exists(), len(seen) - n0),
+               (True, False, 0), f"no progress at all gives up, not until the deadline: {why}")
+    finally:
+        net.public_addrs, net.DOWNLOAD_STALL, net.time.sleep = real, real_stall, real_sleep
+        srv.shutdown()
+
+
+def check_audio_ladder():
+    """youtube_audio tries each way in AUDIO_LADDER until one downloads: a
+    refused stream (HTTP 403) moves on to the next way, within one shared
+    timeout. It stops early only for what no other way changes: a video closed
+    to us (members only, geo-blocked -> Restricted), refused cookies, a
+    timeout. The failure names every attempt in a short line."""
+    e403 = "WARNING: x\nERROR: unable to download video data: HTTP Error 403: Forbidden\n"
+    geo = ("ERROR: [youtube] T1mE658hnfQ: The uploader has not made this video available in your country\n"
+           "This video is available in " + ", ".join(["Zambia"] * 400) + ".\n")
+    url = "https://www.youtube.com/watch?v=T1mE658hnfQ"
+    eq([n for n, _ in ds.AUDIO_LADDER][:2], ["default", "hls"], "ladder: yt-dlp's own clients first, then HLS")
+    eq(any("player_client" in a for a in ds.AUDIO_LADDER[0][1]), False,
+       "ladder: the first way leaves the player clients to yt-dlp")
+    real = ds.run_cmd
+
+    def run(replies):
+        """Play `replies` (rc, stderr, writes a file?) in order; return (result or exception, commands)."""
+        cmds = []
+
+        def fake(cmd, timeout):
+            rc, err, writes = replies[len(cmds)]
+            cmds.append(cmd)
+            out = Path(cmd[cmd.index("-o") + 1]).parent
+            (out / ("audio.m4a" if writes else "audio.webm.part")).write_bytes(b"audio" if writes else b"half")
+            return rc, "", err
+        ds.run_cmd = fake
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                try:
+                    got = ds.youtube_audio(Path("/c.txt"), url)(Path(d), 300)
+                    got = (got.name, got.read_bytes(), sorted(p.name for p in Path(d).iterdir()))
+                except Exception as e:
+                    got = e
+        finally:
+            ds.run_cmd = real
+        return got, cmds
+
+    got, cmds = run([(1, e403, False), (0, "", True)])
+    eq(got, ("audio.m4a", b"audio", ["audio.m4a"]), "ladder: the second way's file, the first way's leftovers removed")
+    eq([("player_client=web_safari" in " ".join(c), "--user-agent" in c, c[-2:]) for c in cmds],
+       [(False, False, ["--", url]), (True, False, ["--", url])],
+       "ladder: 403 on the default clients -> HLS; no user agent override; url after --")
+    got, cmds = run([(1, e403, False)] * len(ds.AUDIO_LADDER))
+    eq((type(got), len(cmds), str(got).count("HTTP Error 403"), "WARNING" in str(got)),
+       (RuntimeError, len(ds.AUDIO_LADDER), len(ds.AUDIO_LADDER), False),
+       "ladder: every way tried once; the error lists each attempt's ERROR line")
+    eq(str(got).startswith("audio download failed: default: ERROR: unable to download"), True, f"ladder message: {got}")
+    got, cmds = run([(1, geo, False)])
+    eq((type(got), str(got), len(cmds)), (ds.Restricted, "not available in the runner's country", 1),
+       "ladder: a geo-block ends it at once (blanked by asr)")
+    got, cmds = run([(None, "", False)])
+    eq((type(got), len(cmds), "timed out" in str(got)), (RuntimeError, 1, True), "ladder: a timeout is not retried")
+    got, cmds = run([(1, "ERROR: [youtube] x: Sign in to confirm you're not a bot\n", False)])
+    eq((type(got), len(cmds)), (RuntimeError, 1), "ladder: refused cookies end it (kept pending)")
+    real_min, ds.AUDIO_MIN_ATTEMPT = ds.AUDIO_MIN_ATTEMPT, 10**6
+    try:
+        got, cmds = run([(1, e403, False)] * 2)
+    finally:
+        ds.AUDIO_MIN_ATTEMPT = real_min
+    eq(len(cmds), 1, "ladder: no further attempt without time for it")
+
+    eq(len(ds.why_failed(geo)) < 400, True, "why_failed: the country list is cut")
+    eq(ds.why_failed("[youtube] a\nWARNING: b\nERROR: c\nERROR: d\n"), "ERROR: c / ERROR: d", "why_failed: ERROR lines")
+    eq(ds.why_failed("x\ny\nz\n"), "y / z", "why_failed: else the end of stderr")
+    eq(ds.restricted("WARNING: [youtube] x: The uploader has not made this video available in your country"), None,
+       "geo-block: only an ERROR line (the probe reports it as a warning and still lists subtitles)")
+
+    # A podcast download failure carries net.save's reason.
+    real_save, net.save = net.save, lambda url, dest, seconds, cap: seen.append(seconds) or "HTTP 403"
+    seen = []
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                ds.direct_audio("https://cdn.example/a.m4a")(Path(d), 705)
+                got = None
+            except RuntimeError as e:
+                got = str(e)
+    finally:
+        net.save = real_save
+    eq((got, seen), ("audio download failed: HTTP 403", [1410]), "podcast: the reason, and twice the time")
+
+    # Past the run's wall-clock limit nothing new starts, and nothing is blanked.
+    import types
+    a = types.SimpleNamespace(no_transcribe=False, max_transcribe=0, max_asr_duration=0, max_asr_total=0, max_run=60)
+    real_spec = ds.importlib.util.find_spec
+    ds.importlib.util.find_spec = lambda name: object()
+    try:
+        b = ds.Budget(a)
+        eq(b.refuse(60), None, "run limit: not reached")
+        b.started -= 61
+        eq(b.refuse(60), ("run time limit reached (1 min)", False), "run limit: reached -> refused, not permanent")
+    finally:
+        ds.importlib.util.find_spec = real_spec
 
 
 def check_archive_rekey_collision():
@@ -1318,7 +1620,7 @@ def check_bestblogs():
 
 
 def check_thepaper_body():
-    """澎湃 article pages: the article's own body, as plain text, never another article's."""
+    """The Paper (thepaper.cn) article pages: the article's own body, as plain text, never another article's."""
     now = datetime(2026, 10, 13, tzinfo=timezone.utc)
     own = "<p>" + "上海書評這一期討論城市記憶與出版史，作者回顧了三十年來的書店變遷。" * 12 + "</p>"
     other = "<p>" + "推薦閱讀：另一篇完全不同的文章內容，篇幅更長。" * 40 + "</p>"
@@ -1336,7 +1638,7 @@ def check_thepaper_body():
 
 
 def check_scraped_sources_switch():
-    """BestBlogs and 澎湃 run only when SCRAPED_SOURCES is on (default off)."""
+    """BestBlogs and The Paper run only when SCRAPED_SOURCES is on (default off)."""
     eq([store.env_flag(v) for v in (None, "", "off", "0", "false", "no", "maybe", "on", "ON", " 1 ", "true", "Yes")],
        [False] * 7 + [True] * 5, "SCRAPED_SOURCES values; unset means off")
     eq([store.env_flag(v, True) for v in (None, "", "off", "on")], [True, True, False, True], "on-by-default flags")
@@ -1359,7 +1661,7 @@ def check_scraped_sources_switch():
 
 
 def check_thepaper_pending_refetched():
-    """A 澎湃 item still pending is fetched again (feed copies are not saved);
+    """A The Paper item still pending is fetched again (feed copies are not saved);
     one with a summary is not, and is re-emitted only to refresh last_seen_at."""
     listing_page = ('<html><body><a href="/newsDetail_forward_111111">甲</a>'
                     '<a href="/newsDetail_forward_222222">乙</a></body></html>')
@@ -1565,6 +1867,49 @@ def check_cookies_rejected():
         "")], [True, True, False, False, False], "cookies rejection is matched narrowly")
 
 
+def check_members_only():
+    """Members-only is the video's nature: blanked wherever yt-dlp says so
+    (probe, audio), never from stdout, never confused with expired cookies."""
+    err = ("ERROR: [youtube] 0imagd_kdA8: This video is available to this channel's members on level: "
+           "Tier 1. Join this channel to get access to members-only content")
+    eq((ds.restricted(err), ds.restricted("WARNING: " + err[7:]), ds.cookies_rejected(err)),
+       ("members only", None, False), "members-only: ERROR lines only, not a cookies failure")
+    with tempfile.TemporaryDirectory() as d:
+        archive = Path(d) / "archive.json"
+        item = {"id": "b" * 40, "title": "t", "source": "s", "category": "c",
+                "url": "https://www.youtube.com/watch?v=0imagd_kdA8"}
+        for label, reply, want in (("probe", (1, "", err), store.BLANK_SUMMARY),
+                                   ("title in stdout", (1, err, "ERROR: [youtube] x: HTTP Error 500"), None)):
+            archive.write_text(json.dumps({"items": [item]}))
+            real = ds.run_cmd
+            ds.run_cmd = lambda cmd, t, reply=reply: reply
+            try:
+                subs(archive, d, "--no-summarize")
+            finally:
+                ds.run_cmd = real
+            eq(json.loads(archive.read_text())["items"][0].get("summary"), want, f"members-only: {label}")
+    class A:
+        no_transcribe, max_transcribe, max_asr_duration, max_asr_total = False, 0, 0, 0
+        audio_timeout = 300
+    real_run, real_spec = ds.run_cmd, ds.importlib.util.find_spec
+    import types
+    stub = "faster_whisper" not in sys.modules
+    if stub:                     # transcribe imports it before fetching; never reached here
+        sys.modules["faster_whisper"] = types.SimpleNamespace(WhisperModel=None)
+    try:
+        ds.run_cmd = lambda cmd, t: (1, "", err)
+        ds.importlib.util.find_spec = lambda name: object()
+        it = {"id": "b" * 40, "url": item["url"]}
+        with tempfile.TemporaryDirectory() as d:
+            changed = ds.asr(it, None, 60, A, ds.Budget(A), Path(d), __import__("collections").Counter(),
+                             ds.youtube_audio(None, item["url"]))
+        eq((changed, it.get("summary")), (True, store.BLANK_SUMMARY), "members-only: audio download -> blank")
+    finally:
+        ds.run_cmd, ds.importlib.util.find_spec = real_run, real_spec
+        if stub:
+            sys.modules.pop("faster_whisper", None)
+
+
 def check_subtitle_from_info_json():
     """One extraction per video: the subtitle comes from the probe's info JSON;
     the url is tried again only when that fails for another reason."""
@@ -1586,14 +1931,14 @@ def check_subtitle_from_info_json():
         real = ds.run_cmd
         try:
             ds.run_cmd = fake([(0, True)])
-            ds.fetch_track(None, "https://youtu.be/x", out_dir, item, "en", True, "en", info, 5)
-            eq((len(calls), "--load-info-json" in calls[0], calls[0][-2:] != ["--", "https://youtu.be/x"],
+            ds.fetch_track(None, "https://youtu.be/xxxxxxxxxxx", out_dir, item, "en", True, "en", info, 5)
+            eq((len(calls), "--load-info-json" in calls[0], calls[0][-2:] != ["--", "https://www.youtube.com/watch?v=xxxxxxxxxxx"],
                 "--sleep-interval" in calls[0]), (1, True, True, False), "subtitle from the info JSON, no sleep")
             calls.clear()
             (out_dir / f"{item}.en.en.vtt").unlink()
             ds.run_cmd = fake([(1, False), (0, True)])
-            ds.fetch_track(None, "https://youtu.be/x", out_dir, item, "en", True, "en", info, 5)
-            eq((len(calls), calls[1][-2:]), (2, ["--", "https://youtu.be/x"]), "failed info-json run retried from the url")
+            ds.fetch_track(None, "https://youtu.be/xxxxxxxxxxx", out_dir, item, "en", True, "en", info, 5)
+            eq((len(calls), calls[1][-2:]), (2, ["--", "https://www.youtube.com/watch?v=xxxxxxxxxxx"]), "failed info-json run retried from the url")
         finally:
             ds.run_cmd = real
 
@@ -1833,12 +2178,6 @@ def check_tag_text_linear():
                       {"id": "__NEXT_DATA__"}), '{"x":1}', "tag_text: unclosed tag before the real one")
 
 
-def check_firstory_tag_strip_linear():
-    t = time.monotonic()
-    ds.HMS_RE.search(__import__("re").sub(r"<[^<>]*+>", " ", "<a" * 200_000))
-    eq(time.monotonic() - t < 2, True, "firstory tag strip: unclosed tags stay linear")
-
-
 def check_thepaper_dates():
     now = un.datetime.now(tz=store.UTC)
     for v in (1760000000000, "1760000000000", "1760000000", 1760000000.0):
@@ -1850,20 +2189,355 @@ def check_thepaper_dates():
        "thepaper relative time")
 
 
+# ---- the checks themselves ------------------------------------------------
+# A green run only says nothing violates a contract today, not that its check
+# would notice a violation. Each mutation breaks one contract in a scratch
+# copy of the project; the named check must then fail. `old` must occur once
+# in its file (check_contracts), so a mutation cannot rot into a no-op.
+# Files are relative to scripts/; only scripts/ is copied.
+MUTATIONS = (
+    # (contract, check, file, old, new)
+    ("C1", "check_scratch_never_left", "store.py",
+     'items = [{k: v for k, v in it.items() if k in ITEM_FIELDS} for it in doc["items"]]',
+     'items = [dict(it) for it in doc["items"]]'),
+    ("C3", "check_asr_permanence", "media.py",
+     "blank = isinstance(e, (NoSpeech, Restricted)) or",
+     "blank = isinstance(e, Restricted) or"),
+    ("C12", "check_encoding", "textproc.py",
+     'if text.count("\\ufffd") / chars > 0.02:',
+     "if False:"),
+    ("C17", "check_cookies_rejected", "media.py",
+     'return bool(COOKIES_REJECTED.search(stderr or ""))',
+     "return False"),
+    ("C18", "check_not_yet_available", "media.py",
+     'NOT_YET_AVAILABLE = {"is_upcoming": "not yet premiered", "is_live": "still live"}',
+     "NOT_YET_AVAILABLE = {}"),
+    ("C19", "check_members_only", "media.py",
+     'return next((why for why, rx in RESTRICTED if rx.search(stderr or "")), None)',
+     "return None"),
+    ("C20", "check_firstory_duration", "media.py",
+     'return Episode(href, hms(e.get("itunes_duration")), "zh")',
+     'return Episode(href, 0.0, "zh")'),
+    ("C20", "check_firstory_duration", "media.py",
+     'if secs and item.get("length") != int(secs):',
+     "if False:"),
+    ("C21", "check_security", "net.py",
+     "if not ip.is_global or ip.is_multicast or",
+     "if ip.is_multicast or"),
+    ("C21", "check_redirect_drops_credentials", "net.py",
+     "if k.lower() not in _CREDENTIALS}",
+     "if True}"),
+    ("C24", "check_feed_body_is_data", "store.py",
+     'feedparser.parse(io.BytesIO(data if isinstance(data, bytes) else str(data).encode("utf-8")))',
+     "feedparser.parse(data)"),
+    ("C25", "check_child_env", "media.py",
+     "if CHILD_ENV.fullmatch(k) and not SECRET_ENV.search(k)}",
+     "if CHILD_ENV.fullmatch(k)}"),
+    ("C25", "check_security", "media.py",
+     '*(["--", youtube_watch_url(url)] if url else [])',
+     "*([youtube_watch_url(url)] if url else [])"),
+    ("C36", "check_audio_ladder", "media.py",
+     'tried.append(f"{name}: {why_failed(err)}")\n            if cookies_rejected(err):',
+     'tried.append(f"{name}: {why_failed(err)}")\n            if True:'),
+    ("C36", "check_audio_ladder", "media.py",
+     '("not available in the runner\'s country",',
+     '("not available in the runner\'s country" * 0,'),
+    ("C37", "check_download_resume", "net.py",
+     'have = have if status == 206 else 0',
+     'have = have'),
+    ("C37", "check_download_resume", "net.py",
+     'h["Range"] = f"bytes={have}-"',
+     'h["X-Range"] = f"bytes={have}-"'),
+    ("C37", "check_audio_ladder", "media.py",
+     'return f"run time limit reached ({limit / 60:.0f} min)", False',
+     'return None'),
+    ("C35", "check_youtube_video_url", "media.py",
+     '*(["--", youtube_watch_url(url)] if url else [])',
+     '*(["--", url] if url else [])'),
+    ("C35", "check_youtube_video_url", "collect.py",
+     'return urlunparse(p._replace(query=f"v={vid}" if p.path.rstrip("/") == "/watch" else "", fragment=""))',
+     "return url"),
+    # the two checks that keep this machinery honest
+    # (split so the text occurs once in this file: in CONTRACTS, not here)
+    ("C32", "check_contracts", "selftest.py",
+     "('check_members" "_only',)),",
+     "('check_members_only_gone',)),"),
+    ("C33", "check_doc_history", "media.py",
+     "# live_status values whose video has no finished recording yet",
+     "# live_status values (previously only is_live) whose video has no finished recording yet"),
+)
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# The contracts: rule, what breaks (usually silently) when it is violated,
+# and the checks that hold it -- or, as a string, why none does yet. This
+# table is the source; `selftest.py --contracts` prints it as markdown. It
+# lives here, not in ARCHITECTURE.md, so CI checks it without reading docs.
+CONTRACTS = (
+    ('C1',
+     'archive.json: one line per item, only ITEM_FIELDS written; feed copies live in memory only; saves are throttled and the end of a run always writes',
+     'scratch fields or full feed text get committed and published; the diff becomes unreadable',
+     ('check_jsonio', 'check_scratch_never_left', 'check_throttled_save',)),
+    ('C2',
+     'the id formula is fixed; when url canonicalisation changes, ids are recomputed and duplicates merged, a colliding id never overwrites',
+     'the same story shows up twice, or one item overwrites another',
+     ('check_merge_and_id', 'check_archive_rekey_collision', 'check_firstory_host',)),
+    ('C3',
+     "a summary is left blank only for the item's own nature; blocked, timed out, over budget or missing packages stay pending",
+     'a transient failure becomes a permanent blank and the item never gets a summary',
+     ('check_asr_permanence', 'check_podcast_blank_is_saved', 'check_transcript_without_content_is_final', 'check_douban_waits_for_a_copy',)),
+    ('C4',
+     'environment variables are read by store.Config only; import reads no environment; page chrome means "no body", never "blocked"',
+     'tests and workflows see different settings; a chrome-only page pauses a whole site',
+     ('check_config', 'check_refactor_contracts',)),
+    ('C5',
+     'rules.json has three sections and every rule compiles on its own',
+     'one bad rule disables a whole rule group',
+     ('check_rules_file', 'check_boilerplate_rules_compile_alone',)),
+    ('C6',
+     'summarize routes (douban, youtube, podcast, feed, fetch), and feed copies exist only within the collecting process',
+     'an item takes the wrong route: a page is fetched that should not be, or an item waiting for a copy is blanked',
+     ('check_routes_douban_blogspot', 'check_feed_images', 'check_collect_then_summarize', 'check_offline_only',)),
+    ('C7',
+     'fetches run in parallel across hosts, one at a time per host; a refusal pauses that host for the run',
+     'concurrent requests to one site get us blocked',
+     ('check_parallel_fetch', 'check_blocked_host_paused',)),
+    ('C8',
+     'FALLBACKS decides which third parties see a url; every attempt is logged',
+     'urls go to third parties nobody agreed to; their value cannot be measured',
+     ('check_fallback_switch_and_log',)),
+    ('C9',
+     'summary QC and qc_gate before writing; each item is refetched at most once',
+     'bad summaries are published, or an item is refetched in an endless loop',
+     ('check_summary_qc', 'check_index_gate', 'check_index_within_run', 'check_backfill_qc_only',)),
+    ('C10',
+     'the full backfill runs only when the rules hash changes',
+     'every run re-processes the whole archive, or stored summaries never catch up with new rules',
+     ('check_backfill_once_per_rules',)),
+    ('C11',
+     'summary extraction: paragraph scope, <code> slicing, line breaks kept',
+     'summaries pick up navigation or code, or lose their line breaks',
+     ('check_text', 'check_summary_lines', 'check_strip_code_edges', 'check_paragraph_scopes',)),
+    ('C12',
+     'decoding order and mojibake detection; mojibake is never summarised or translated',
+     'mojibake is "translated" into nonsense and published',
+     ('check_encoding', 'check_large_non_utf8_body', 'check_language',)),
+    ('C13',
+     'translation: DeepL results already billed are kept, DeepL is disabled by status code; a gtx refusal is not re-sent',
+     'double billing; request volume doubles while the service is refusing',
+     ('check_translate', 'check_translate_partial_and_refusals', 'check_deepl_fatal_by_status',)),
+    ('C14',
+     'thumbnails are judged by url only, cloud resize parameters stripped, deny list applied',
+     'logos and ads become thumbnails',
+     ('check_thumbs', 'check_thumb_clean',)),
+    ('C15',
+     'subtitle track priority, one .vtt per id, adjacent duplicate cues merged',
+     'the summary uses a translation of a translation; an old file shadows a new one',
+     ('check_subtitle_priority', 'check_vtt_and_process',)),
+    ('C16',
+     'each video is extracted once (--load-info-json)',
+     'YouTube requests double and rate limiting gets more likely',
+     ('check_subtitle_from_info_json',)),
+    ('C17',
+     'expired cookies are recognised only from specific yt-dlp stderr messages; status.json changes only after a YouTube probe',
+     'a hostile video title stops the run; a podcast-only run misreports the cookies',
+     ('check_cookies_rejected', 'check_cookies_status', 'check_status_ignores_podcasts',)),
+    ('C18',
+     'is_upcoming / is_live videos are skipped right after the probe, no length written',
+     "a download that must fail is retried daily; a length that is not the video's is stored",
+     ('check_not_yet_available',)),
+    ('C19',
+     'members-only videos get BLANK_SUMMARY and are not a cookies failure',
+     'a video we can never open is retried every day',
+     ('check_members_only',)),
+    ('C20',
+     'podcast duration comes only from duration fields; after ASR length is the measured audio; an episode page without audio is blanked and saved',
+     'the publish time is taken as the duration (about 20x) and the episode is never transcribed for exceeding the cap',
+     ('check_podcast', 'check_firstory_duration',)),
+    ('C21',
+     'every connection goes through net: public addresses only, every hop re-checked, credentials dropped across origins, refusals not retried, a 303 does not leak into retries, audio downloads use the same path',
+     'SSRF: internal content is summarised and published; the API key follows a redirect off-site',
+     ('check_security', 'check_redirect_drops_credentials', 'check_refusal_is_not_retried', 'check_303_does_not_leak_into_retry', 'check_transport', 'check_download_guard',)),
+    ('C22',
+     'TLS certificates are always verified (plain and impersonated)',
+     'a man in the middle can feed us anything',
+     ('check_tls_verified',)),
+    ('C23',
+     'every parser of remote text runs in linear time',
+     'one hostile page stalls the run for hours',
+     ('check_no_backtracking', 'check_tag_text_linear', 'check_offsets_survive_unicode_case',)),
+    ('C24',
+     'feedparser only ever receives a stream',
+     'a body is taken as a local path or url and reads files on the runner',
+     ('check_feed_body_is_data',)),
+    ('C25',
+     'yt-dlp children get allowlisted environment variables only; the url goes after --',
+     'secrets leak to the child; a url is executed as an option',
+     ('check_child_env', 'check_security',)),
+    ('C26',
+     'channel names and ids taken from pages are allowlist-validated before building a url',
+     'a remote string becomes an arbitrary url',
+     ('check_telegram_channels', 'check_youtube_channel_urls', 'check_bridge_whitelist',)),
+    ('C27',
+     'the inbox accepts only safe urls within retention; collect only reads it',
+     'conflicts with the reader writing mid-run; javascript: and similar urls get stored',
+     ('check_inbox',)),
+    ('C28',
+     'the OPML is decoded in memory only',
+     'the subscription list lands on disk and gets committed',
+     ('check_opml_secret',)),
+    ('C29',
+     "scraped sources are off by default; The Paper takes only the article's own body and reads dates as Beijing time",
+     'unintended scraping; a summary mixes in another article',
+     ('check_scraped_sources_switch', 'check_bestblogs', 'check_thepaper_body', 'check_thepaper_pending_refetched', 'check_thepaper_dates',)),
+    ('C30',
+     'the language header is sent; the browser fingerprint carries only its own headers',
+     'the wrong language version is served; a mismatched fingerprint gets blocked',
+     ('check_accept_language',)),
+    ('C31',
+     'the CLI subcommands work; --dry-run writes nothing',
+     'maintenance commands are found broken only when needed',
+     ('check_cli_subcommands',)),
+    ('C32',
+     'CONTRACTS and the checks agree; every mutation still applies',
+     'rules sit in a table with no check behind them; mutations rot into no-ops unnoticed',
+     ('check_contracts',)),
+    ('C33',
+     'code comments carry no development history',
+     '"what happens if this is written otherwise" is crowded out by the story of how it got this way',
+     ('check_doc_history',)),
+    ('C34',
+     'workflows: permissions {}, persist-credentials false, actions pinned by SHA, one concurrency group',
+     'the token leaks, or concurrent writes overwrite each other',
+     'selftest does not parse the workflow yml (ARCHITECTURE.md §10)'),
+    ('C35',
+     'only YouTube *videos* (a valid 11-character id from store.youtube_video_id) reach media and the youtube route; the url yt-dlp gets is always rebuilt from the id (youtube_watch_url) and names that one video; stored video urls carry no list, index, si or t parameters',
+     'a ?list= url makes the probe walk the whole playlist until it times out, every day; one video shows up several times under different share parameters',
+     ('check_youtube_video_url', 'check_security',)),
+    ('C36',
+     "a YouTube audio download that fails is tried again by the next way in AUDIO_LADDER (yt-dlp's own client choice first, no user agent override), within one timeout; only a closed video (members only, geo-blocked), refused cookies or a timeout end it early; failures name each attempt's ERROR line",
+     'one refused player client (HTTP 403) leaves every video without captions pending for good, and upgrading yt-dlp changes nothing because its client choice is overridden; the log shows a country list instead of the reason',
+     ('check_audio_ladder',)),
+    ('C37',
+     'podcast audio downloads resume a broken or stalled transfer from the bytes on disk (a server ignoring Range starts the file over), retry a refused plain client once with the browser fingerprint, and report why they failed; past the run time limit no further ASR job starts',
+     'a long episode on a slow CDN never arrives in one piece and stays pending for good, with a log line that fits every cause; slow downloads run the job into its timeout and nothing is committed',
+     ('check_download_resume', 'check_audio_ladder',)),
+)
+
+
+def check_contracts():
+    """The contract table and the checks cannot drift apart: every check
+    belongs to a contract, every named check exists, every contract has a
+    check or says why not, every mutation still applies."""
+    ids = [c[0] for c in CONTRACTS]
+    eq(sorted(i for i in set(ids) if ids.count(i) > 1), [], "contracts: duplicate ids")
+    named = {c for *_, cs in CONTRACTS if isinstance(cs, tuple) for c in cs}
+    defined = {n for n in globals() if n.startswith("check_")}
+    eq(sorted(named - defined), [], "contracts: table names checks that do not exist")
+    eq(sorted(defined - named), [], "contracts: checks that belong to no contract")
+    eq([cid for cid, *_, cs in CONTRACTS if not cs], [], "contracts: a row with neither a check nor a reason")
+    rows = {cid: cs for cid, *_, cs in CONTRACTS}
+    for cid, check, f, old, new in MUTATIONS:
+        eq((cid in rows, check in (rows.get(cid) or ()) and isinstance(rows[cid], tuple)), (True, True),
+           f"mutation {cid}/{check}: listed in its contract")
+        eq((ROOT / "scripts" / f).read_text(encoding="utf-8").count(old), 1, f"mutation {cid}: {old[:40]!r} occurs once in {f}")
+
+
+def contracts_markdown() -> str:
+    out = ["| # | Contract | When violated | Checks |", "|---|---|---|---|"]
+    for cid, rule, cons, cs in CONTRACTS:
+        last = "、".join(f"`{c}`" for c in cs) if isinstance(cs, tuple) else f"not automated: {cs}"
+        out.append(f"| {cid} | {rule} | {cons} | {last} |")
+    return "\n".join(out)
+
+
+# Words that narrate how the code came to be rather than what it does. That
+# history has one place, ARCHITECTURE.md §12; elsewhere it crowds out "what
+# happens if this is written otherwise".
+HISTORY_WORDS = re.compile(r"不再|(?<!出)現在|原本|原先|以前|舊版|後來|修正後|這次|曾經"
+                           r"|\b(?:previously|used to|no longer|was changed|we changed)\b", re.I)
+
+
+def history_in_doc(doc: str) -> list[str]:
+    """History words in ARCHITECTURE.md outside §12 (`--docs`, never in CI).
+    Quoted text (`...`) is what a program says, not what the document narrates."""
+    body = re.sub(r"`[^`\n]*`", lambda m: " " * len(m[0]), doc.split("\n## 12.", 1)[0])
+    return [f"ARCHITECTURE.md:{body[:m.start()].count(chr(10)) + 1} {m[0]}" for m in HISTORY_WORDS.finditer(body)]
+
+
+def check_doc_history():
+    """No development history in code comments."""
+    import tokenize
+    hits = []
+    for f in sorted((ROOT / "scripts").glob("*.py")):
+        if f.name == "selftest.py":           # names the words it forbids
+            continue
+        src = f.read_text(encoding="utf-8")
+        for t in tokenize.generate_tokens(io.StringIO(src).readline):
+            if t.type == tokenize.COMMENT and (m := HISTORY_WORDS.search(t.string)):
+                hits.append(f"{f.name}:{t.start[0]} {m[0]}")
+    eq(hits, [], "history belongs in ARCHITECTURE.md §12")
+    eq(history_in_doc("a\n現在\n出現在 `no longer`\n## 12. x\n以前"), ["ARCHITECTURE.md:2 現在"], "doc scan: quotes and §12 exempt")
+
+
+def run_checks(only: str | None) -> None:
+    for name, fn in list(globals().items()):
+        if name.startswith("check_") and (only is None or name == only):
+            store.configure()                 # every check starts from the environment
+            before = len(FAILS)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    fn()
+            except Exception:
+                FAILS.append("crashed:\n" + traceback.format_exc(limit=4))
+            FAILS[before:] = [f"[{name}] {f}" for f in FAILS[before:]]
+
+
+def run_mutations() -> None:
+    """Each mutation in a scratch copy of scripts/; the
+    named check must fail there. A mutation it survives is a check that
+    guards nothing."""
+    import shutil
+    import subprocess
+    for cid, check, f, old, new in MUTATIONS:
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copytree(ROOT / "scripts", Path(d) / "scripts",
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            target = Path(d) / "scripts" / f
+            src = target.read_text(encoding="utf-8")
+            if src.count(old) != 1:
+                continue                      # reported by check_contracts
+            target.write_text(src.replace(old, new), encoding="utf-8")
+            try:
+                r = subprocess.run([sys.executable, str(Path(d) / "scripts" / "selftest.py"), "--only", check],
+                                   capture_output=True, text=True, timeout=600)
+                caught = r.returncode != 0 and f"[{check}]" in r.stdout
+            except subprocess.TimeoutExpired:
+                caught = False
+            if not caught:
+                FAILS.append(f"[mutation {cid}] {check} still passes with {f}: {old[:60]!r} -> {new[:60]!r}")
+
+
 if __name__ == "__main__":
     # Checks run the real scripts, which narrate as they go ("no OPML",
     # "[RETENTION] dropped ..."): that is test scaffolding, not the real run,
     # so it is swallowed; only failures are printed.
     for n in un.OPML_SECRETS:                 # never fetch real feeds from a test
         os.environ.pop(n, None)
-    for name, fn in list(globals().items()):
-        if name.startswith("check_"):
-            store.configure()                 # every check starts from the environment
-            try:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    fn()
-            except Exception:
-                FAILS.append(f"{name} crashed:\n" + traceback.format_exc(limit=4))
+    if "--contracts" in sys.argv:             # the table for ARCHITECTURE.md §11
+        print(contracts_markdown())
+        sys.exit(0)
+    if "--docs" in sys.argv:                  # local only: CI never reads ARCHITECTURE.md
+        hits = history_in_doc((ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8"))
+        for h in hits:
+            print("FAIL: history belongs in §12:", h)
+        print("docs:", "FAILED" if hits else "ok")
+        sys.exit(1 if hits else 0)
+    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+    run_checks(only)
+    # Mutations only on a clean full run: a failing check would "catch" them all.
+    if only is None and not FAILS:
+        run_mutations()
     for f in FAILS:
         print("FAIL:", f)
     print("selftest:", "FAILED" if FAILS else "ok")
