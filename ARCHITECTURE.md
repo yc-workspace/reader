@@ -3,6 +3,8 @@
 無伺服器新聞快照：GitHub Actions 定時抓 RSS／網頁／YouTube 字幕／podcast 語音轉文字，摘要成繁體中文，
 寫進 `data/archive.json` 並 commit。沒有資料庫，這個檔案就是整個系統的狀態。
 
+規則不是寫給人記得的：§11 的每一條契約都對應 `selftest.py` 的檢查，兩個 workflow 在碰資料前先跑，失敗就不動 archive；檢查本身由突變測試證明有效（§11.1）。機器管不到的列在 §10。開發過程只記在 §12。
+
 ## 1. 模組
 
 | 檔案 | 職責 |
@@ -13,7 +15,7 @@
 | `collect.py` | 入口一（`updatenews.yml`）。OPML（檔案或 `FOLLOW_OPML_B64*` secret）／RSS、Telegram／即刻、YouTube 頻道、`data/inbox.json`、抓取來源（BestBlogs、澎湃，受 `SCRAPED_SOURCES` 控制）→ 正規化 url、id、去重、留存；接著在同一行程跑 `summarize.run`（`--no-summarize` 時不跑） |
 | `summarize.py` | 縮圖過濾（`thumb_*`）、取文退路（`fetch_article`，抽取本身在 `textproc.from_html`）、摘要 QC（`qc_*`，只輸出到 log）、路由 pending 條目、跨 host 並行抓取、回填；`run()` 供兩個入口呼叫；命令列是維護工具（`backfill`、`mine`） |
 | `media.py` | 入口二（`downloadsub.yml`）。yt-dlp 字幕（子行程只拿白名單環境變數）、faster-whisper ASR 後備；podcast 單集頁（小宇宙、Firstory）→ 音檔網址與時長（`resolve_episode`）→ ASR；`data/status.json`；最後在同一行程摘要新逐字稿 |
-| `selftest.py` | 離線契約檢查；兩個 workflow 都在碰資料前先跑。每個檢查前重讀設定，單一檢查崩潰會記為失敗而不中斷其他檢查 |
+| `selftest.py` | 離線契約檢查（§11，契約表 `CONTRACTS` 在這個檔案裡；只讀 `scripts/`，不讀本文件）；兩個 workflow 都在碰資料前先跑。每個檢查前重讀設定，單一檢查崩潰會記為失敗而不中斷其他檢查；失敗訊息標出是哪個檢查。其他檢查全部通過後執行突變測試（§11.1） |
 | `rules.json` | 唯一的資料檔，三個獨立區段：`boilerplate`（摘要時刪除的樣板）、`qc_chrome`（介面文字樣式：抽取時判定「沒有正文」、QC 判定「只剩介面文字」，兩處共用 `textproc.chrome_re`）、`sites`（站台表，在使用處以 `store.site()` 讀取，不在 import 時讀）。`boilerplate` 與 `qc_chrome` 不可合併：前者會在 QC 看到之前就把介面文字刪掉 |
 
 依賴：`requirements.txt`，兩個 workflow 共用，全部釘死版本（`updatenews.yml` 安裝時略過 faster-whisper、yt-dlp、bgutil 三行，那個 job 用不到）。網路只用 curl_cffi（本專案不直接使用 `requests`，它是 trafilatura 等套件的依賴）。
@@ -37,7 +39,7 @@ store, net     -> (無)
 | 欄位 | 寫入者 | 備註 |
 |---|---|---|
 | `id` | `collect` | sha1(category, source, title, url)，40 位小寫 hex；也是字幕檔名，公式不可改 |
-| `category` `source` `title` `url` | `collect` | url 經 `canonical_url()`，只收 http(s)；同站多個網域統一為一個（`HOST_ALIASES`：`open.firstory.me` → `open.firstory.fm`）。規則改變後，`load_archive` 會在下次執行時改寫已存的 url、重算 id，並合併因此重複的條目（重算後撞上既有 id 的也合併，不覆蓋） |
+| `category` `source` `title` `url` | `collect` | url 經 `canonical_url()`，只收 http(s)；YouTube 影片網址只留影片 id（`watch?v=ID`、`youtu.be/ID`、`shorts/ID`，去掉播放清單與分享參數）；同站多個網域統一為一個（`HOST_ALIASES`：`open.firstory.me` → `open.firstory.fm`）。規則改變後，`load_archive` 會在下次執行時改寫已存的 url、重算 id，並合併因此重複的條目（重算後撞上既有 id 的也合併，不覆蓋） |
 | `published_at` `last_seen_at` | `collect` | feed 給的日期一律覆寫；`last_seen_at` 是 feed 最後一次列出該條目的時間 |
 | `summary` `thumbnail` | `summarize` | |
 | `length` | `media` | 影片／單集秒數，給前端顯示 |
@@ -189,17 +191,22 @@ log 為英文，依類別列出有問題的標題、處置與修改提示，不�
 
 ## 7. 字幕（`media.py`）
 
+- 只處理 YouTube 影片（`store.is_youtube` 即「網址含合格的影片 id」）；頻道頁、播放清單是一般網頁，走 `fetch`。yt-dlp 的每一次呼叫都經 `media.ytdlp`，網址由影片 id 重建成 `https://www.youtube.com/watch?v=ID`，不是存下的網址。
+- **探測成功、音訊下載卻回報 `Video unavailable`**：探測用的 web client 看得到影片，下載用的 client 都拒絕。這不能證明影片已不存在（區域、client 限制都會如此），依 C3 保持 pending；明確的永久原因才由 `RESTRICTED` 判定。
+- **音訊下載的後備階梯**（`AUDIO_LADDER`，`youtube_audio`）：串流網址萃取成功，下載時仍可能被拒（`HTTP Error 403`）；YouTube 拒絕哪個 player client、哪種協定每幾個月變一次，而 yt-dlp 下載失敗後不會自己改用別的格式。因此依序嘗試四種來源，第一個下載成功的即採用：`default`（不指定 `player_client`，交給 yt-dlp 對登入狀態的預設選擇，這是 yt-dlp 隨 YouTube 變動而更新的部分）→ `hls`（`web_safari` 的 m3u8，網址與存取檢查都和 https 格式不同）→ `premerged`（格式 18，唯一不需 PO token 的 https 格式）→ `tv`。四次嘗試共用同一個下載時限（剩不到 45 秒就不開始下一次）。只有換來源也不會改變的情況提前結束：影片對我們關閉（`Restricted`）、cookies 被拒、逾時。音訊下載不帶 `--user-agent`（各 client 送自己的 UA）；探測與字幕（`SUB_ARGS`）維持 `player_client=web` 與固定 UA。後備成功時 log `[AUDIO] <名稱> worked after: …`；全部失敗時 `[ASR-FAILED]` 逐一列出每次嘗試的 `ERROR:` 行（`why_failed`，每行最多 300 字元）。
 - 優先序：不需機翻 > 人工 > 語言。`live_chat` 不是字幕；`zh-Hant-TW` 是地區，`zh-Hant-en` 才是二次機翻。
 - 每個 id 只留一個 `.vtt`：下載或 ASR 成功後，以 `store.prune_subtitles` 刪除同 id 排名較低的檔案；每輪開始時也清一次既有的多餘檔案。排序仍由 `pick_subtitle` 決定。
 - ASR 輸出 VTT 時，與前一個 cue 文字相同的 cue 併入前一個（延長結束時間），避免 Whisper 幻覺迴圈把同一句寫成幾十個 cue；不相鄰的重複保留。
 - 檔名 `{id}.{原文語言}.{字幕語言}.vtt`；語言碼來自遠端，經 `safe_lang` 過濾才進檔名或 `--sub-langs`。
-- ASR 預算以音訊秒數計；撞牆且剩不到 10 分鐘就收工。逾時殺整個行程群組並清半成品。
+- ASR 預算以音訊秒數計；撞牆且剩不到 10 分鐘就收工。另有整輪的時鐘上限（`Limits.max_run`，270 分鐘）：超過後不開始新的 ASR（log `run time limit reached`，保持 pending），因為 job 在 340 分鐘被終止時什麼都不會 commit。逾時殺整個行程群組並清半成品。
 - 開始前刪除 id 已不在 archive 裡的 `.vtt`。
 - **每支影片只萃取一次**：`--dump-json` 探測的結果存成暫存 info JSON（系統暫存目錄，權限 0700，用完即刪，永遠不在 repo 內：它可能含 session cookies），字幕以 `--load-info-json` 從它下載，避免重複萃取（那會多一次 YouTube 請求，也提高被限流的機會），也不需要固定等待。若這一步不是因為「沒有這個語言的字幕」而失敗（例如 PO token 過期），改用網址重試一次。
 - **cookies 失效**只認 yt-dlp 的特定訊息（`cookies are no longer valid`、`have been rotated`、`confirm you're not a bot`），且只看 stderr。年齡限制、會員影片的提示也會提到 `--cookies`，不算失效，不中止整輪。
+- **尚未有錄影的影片**：探測結果的 `live_status` 是 `is_upcoming`（排定的直播或首映）或 `is_live`（直播中）時，探測後立即跳過（log `[WAIT]`），不取字幕、不下載音訊、不寫 `length`，保持 pending，等結束後的下一輪再處理。這類影片沒有字幕，音訊下載必定失敗（「Premieres in 31 hours」），時長也還不是影片的時長。只在探測這一處判斷，下游（`Budget.refuse`、`asr`）沒有直播分支。
+- **會員限定影片**：yt-dlp 的 stderr 出現 `ERROR: [youtube] …: This video is available to this channel's members` 或 `Join this channel to get access to members-only content` 時，是影片本身對我們帳號的性質，寫 `BLANK_SUMMARY`（log `[RESTRICTED]`），不每天重試。判斷集中在 `media.restricted`（規則表 `RESTRICTED`），探測、字幕下載、音訊下載三處都用它；只看 stderr 的 `ERROR:` 行，與 cookies 失效（`cookies_rejected`）分開，不中止整輪。探測失敗的 log 附上 yt-dlp 的 stderr。同一張表也收「上傳者未開放所在國家」（`ERROR: [youtube] …: The uploader has not made this video available in your country`，log 顯示 `not available in the runner's country`）：runner 的所在國家由 GitHub 決定，對本專案而言與會員牆同樣不會改變。探測（`--ignore-no-formats`）把它當警告，仍會列出字幕，所以有字幕的影片照常取字幕；只有需要下載音訊時才因這條規則留白。
 - 下載與 ASR 結束後，在同一行程以 `summarize.run(offline_only=True)` 摘要新逐字稿，archive 只寫一次。
-- **ASR 失敗的歸類**：只有條目本身的性質寫 `BLANK_SUMMARY`——沒有語音（`NoSpeech`）、影片超過 ASR 時長上限（3 小時，`TooLong` 或已知時長）。音檔下載失敗、逾時、缺 faster-whisper、預算不足一律保持 pending。
-- **Podcast**（`www.xiaoyuzhoufm.com/episode/…`、`open.firstory.fm|me/story/…`；節目首頁、使用者頁不算）：`media.resolve_episode` 找音檔——小宇宙取頁面 `og:audio`（.m4a），時長取 `__NEXT_DATA__` 的 `duration`、退而取「N分钟」；Firstory 先找頁面裡的 mp3／m4a 網址，沒有就讀頁面連到的節目 RSS（`feed.firstory.me/rss/user/…`），取網址含該集 id 的條目的 enclosure 與 `itunes:duration`。音檔以 `net.download` 下載（與 `net.get` 同一套位址檢查，每一跳轉址與每條連線都重驗；上限 512 MB、整體時限同 ASR 下載逾時；不經 yt-dlp、不帶 cookies），再走同一套 Whisper 與同一份 ASR 預算；時長未知時以實際音訊長度計入預算，時長同時寫入 `length`。檔名 `{id}.zh.{偵測語言}.vtt`。單集頁讀得到但沒有可用音檔（頁面無音檔、頁面 404/410、音檔指向非公網位址）：寫 `BLANK_SUMMARY`，這是單集本身的性質。讀不到單集頁或節目 RSS（無回應、403、5xx 等，`EpisodeUnreachable`）、解析錯誤、下載或轉錄失敗、超過 ASR 時長上限：保持 pending，下一輪再試，次數不限、不做任何標記。沒有語音同樣寫 `BLANK_SUMMARY`。
+- **ASR 失敗的歸類**：只有條目本身的性質寫 `BLANK_SUMMARY`——沒有語音（`NoSpeech`）、會員限定或所在國家未開放的影片（`Restricted`，見上）、影片超過 ASR 時長上限（3 小時，`TooLong` 或已知時長）。音檔下載失敗、逾時、缺 faster-whisper、預算不足一律保持 pending。
+- **Podcast**（`www.xiaoyuzhoufm.com/episode/…`、`open.firstory.fm|me/story/…`；節目首頁、使用者頁不算）：`media.resolve_episode` 找音檔——小宇宙取頁面 `og:audio`（.m4a），時長取 `__NEXT_DATA__` 的 `duration`、退而取「N分钟」；Firstory 先讀頁面連到的節目 RSS（`feed.firstory.me/rss/user/…`），取網址含該集 id 的條目的 enclosure 與 `itunes:duration`；RSS 不存在、讀不到或沒有該集時，才用頁面裡的 mp3／m4a 網址，時長視為未知。**時長只取字面上就是時長的欄位**（`__NEXT_DATA__` 的 `duration`、`itunes:duration`），頁面上的 `HH:MM:SS` 是發布時間，不拿來當時長。音檔以 `net.save` 下載（與 `net.get` 同一套位址檢查，每一跳轉址與每條連線都重驗；上限 512 MB；整體時限是同長度 YouTube 下載的兩倍，最少 10 分鐘、最多 30 分鐘；不經 yt-dlp、不帶 cookies）。傳輸中斷或停滯（約 45 秒沒有資料）時，從已寫入的位元組以 `Range` 續傳，每次都從原始網址重新走一遍轉址；伺服器不理會 `Range`（回 200）就整個重來，不會把兩份內容接在一起；有進展的嘗試不計入「連續 8 次沒有進展就放棄」；被拒絕的狀態碼（403 等）改用瀏覽器指紋再試一次。失敗時 `[ASR-FAILED]` 寫出原因（`HTTP 403`、`timed out after 1410s (12.3 MB in …; last: …)`、`larger than 512 MB`、`refused: …`），再走同一套 Whisper 與同一份 ASR 預算；時長未知時以實際音訊長度計入預算。ASR 成功後，`length` 一律改寫為解碼出的實際音訊長度（YouTube 與 podcast 皆同；頁面或 RSS 的時長只是下載前的估計）。檔名 `{id}.zh.{偵測語言}.vtt`。單集頁讀得到但沒有可用音檔（頁面無音檔、頁面 404/410、音檔指向非公網位址）：寫 `BLANK_SUMMARY`，這是單集本身的性質。讀不到單集頁或節目 RSS（無回應、403、5xx 等，`EpisodeUnreachable`）、解析錯誤、下載或轉錄失敗、超過 ASR 時長上限：保持 pending，下一輪再試，次數不限、不做任何標記。沒有語音同樣寫 `BLANK_SUMMARY`。
 
 ## 8. 安全
 
@@ -216,7 +223,7 @@ log 為英文，依類別列出有問題的標題、處置與修改提示，不�
 | TLS 憑證 | curl 預設驗證憑證與主機名；selftest 以本機自簽憑證確認會被拒絕（一般與指紋兩種模式） |
 | 路徑穿越（遠端語言碼、竄改過的 id 進檔名） | `valid_id`（40 位 hex）、`safe_lang` |
 | 參數注入（url 被 yt-dlp 當成選項） | url 一律放在 `--` 之後 |
-| podcast 頁面給的音檔網址指向內網 | `media.resolve_episode` 先以 `net.safe_url` 篩；下載走 `net.download`，轉址每一跳、每條連線都釘在驗過的公網位址（DNS rebinding 同樣擋下），大小與時間有上限 |
+| podcast 頁面給的音檔網址指向內網 | `media.resolve_episode` 先以 `net.safe_url` 篩；下載走 `net.save`，轉址每一跳、每條連線都釘在驗過的公網位址（DNS rebinding 同樣擋下），大小與時間有上限 |
 | 遠端欄位進檔名 | 字幕輸出樣板用經 `safe_lang` 的語言碼，不用 `%(language)s`（遠端字串會直接進檔名） |
 | 執行期下載未釘版的程式 | 用 pip 鎖定的 `yt-dlp-ejs`，不用 `--remote-components ejs:github`（那會在執行期從 GitHub 下載未釘版的程式） |
 | 子行程取得 secret | `DEEPL_API_KEY` 會出現在 `media` 的環境（摘要要用），但 `media.run_cmd` 只把白名單內的環境變數（`PATH HOME LANG HF_HOME DENO_* XDG_*` 等）交給 yt-dlp，其中名稱含 `KEY/TOKEN/SECRET/PASSWORD/OPML/COOKIE/CREDENTIAL/AUTH` 的仍剔除 |
@@ -251,7 +258,9 @@ pip 未用雜湊驗證、間接依賴未釘版；服務映像只釘 tag 未釘 d
 | 摘要 QC 報告 | `python scripts/summarize.py backfill --dry-run`（不寫檔） |
 | 只套用 QC 修正 | `python scripts/summarize.py backfill --qc-only` |
 | 挖樣板規則 | `python scripts/summarize.py mine N` |
-| 檢查 | `python scripts/selftest.py` |
+| 檢查 | `python scripts/selftest.py`（單一檢查：`--only check_名稱`，不跑突變） |
+| 產生 §11 契約表 | `python scripts/selftest.py --contracts` |
+| 檢查本文件不寫開發歷史（本機） | `python scripts/selftest.py --docs` |
 
 **log 格式**（兩個 workflow 都設 `PYTHONUNBUFFERED=1`，逐行輸出，job 逾時被終止也不會丟掉最後幾行）：
 - `WARNING:`／`ERROR:`：需要注意的事；`::warning::`：QC 的 Actions 註記
@@ -276,12 +285,89 @@ Secrets：`FOLLOW_OPML_B64`（必要時加 `_2`…`_5`）、`DEEPL_API_KEY`、`Y
 
 ## 10. 已知盲區
 
-| 盲區 | 說明 |
+這一節不寫「請注意」：那等於把責任交給下一個人的記憶力。這裡只列機器管不到的事、為什麼，以及可能的方向。
+
+| 盲區 | 為什麼難自動化 | 可能的方向 |
+|---|---|---|
+| 摘要品質 | 選錯句子不會報錯；沒有標準答案可比對 | 人工抽樣 |
+| 站台改版 | 只有改版之後才有樣本 | 看 `↛` 比例與 QC 的 `scrape` 警告是否上升 |
+| 第三方服務 | reader proxy、Wayback、gtx 皆無 SLA，離線測試碰不到真服務 | log 的 `via=… ok\|miss` 統計 |
+| 大量匯入 | 單輪新增遠超 `MAX_ITEMS` 時，未處理條目的 feed 副本隨行程結束而消失；副本刻意不落地（§8） | 調高 `MAX_ITEMS` 後手動補跑 |
+| 中途被殺 | 存檔節流，job 逾時被強制終止最多遺失約 30 秒的進度（下輪重做；寫入是原子的，檔案不會損壞） | — |
+| podcast 辨識品質 | `downloadsub.yml` 使用 `WHISPER_MODEL=small`（程式預設 `base`），中文錯字較少但轉錄約慢一倍；`MAX_ASR_TOTAL_SECONDS` 以音訊秒數計，不隨模型調整；離線測試不載入模型 | 對照 job 實際耗時與時限 |
+| podcast 失敗無上限 | ASR 一直失敗的單集（音檔下載失敗、格式無法解碼、超過 3 小時上限）或單集頁一直讀不到的，每天重試，直到留存期滿被移出 archive。失敗不計入 ASR 預算，但每次都耗用 workflow 時間；已知時長超過上限的在下載前就被擋下。不記錄失敗次數，因為不另設狀態檔（§2） | 下載失敗的原因已寫進 log（`net.save`），依實際原因決定 |
+| ASR 容量 | 每輪最多 `MAX_TRANSCRIBE` 集、`MAX_ASR_TOTAL_SECONDS` 秒；新單集多於此數時積壓只增不減，程式無從判斷哪些節目值得轉 | 調整上限，或在訂閱端限制節目 |
+| `skip` 路由的條目 | `news.google.com` 被跳過、不寫任何值，條目永遠沒有 summary | 決定要留白或不收進 archive |
+| 已存的錯誤 `length` | Firstory 時長錯誤修正前已轉錄的單集，不會再進 `media`，`length` 維持舊值 | 以 RSS 的 `itunes:duration` 做一次性修正 |
+| workflow 設定（權限、concurrency、釘 SHA） | selftest 只讀 Python 與 `rules.json`，不解析 yml | 在 selftest 解析兩個 yml |
+| 文件與程式的一致 | CI 不讀 `ARCHITECTURE.md`，所以 §11 的表格可能落後 `CONTRACTS`，本文件寫入開發歷史也擋不下來 | 改動後在本機跑 `selftest.py --contracts` 重新產生 §11、跑 `selftest.py --docs` |
+| 檔案層級的突變覆蓋 | 突變清單只覆蓋 §11 標了 ✅ 的部分契約；沒有突變的檢查可能無效而不自知 | 逐步為每條契約補一筆突變 |
+
+## 11. 契約
+
+每一列：規則、違反時會發生什麼（通常沒有錯誤訊息）、負責的檢查。**來源是 `selftest.py` 的 `CONTRACTS`**，下表由 `python scripts/selftest.py --contracts` 產生（`selftest.py` 以英文撰寫，表格因此是英文），改契約時改 `CONTRACTS` 再重新產生這張表。GitHub workflow 只跑 `scripts/`，不讀這份文件。`check_contracts` 確認 `CONTRACTS` 與檢查一致：表中的檢查都存在、每個檢查都屬於某一列、沒有檢查的列必須寫明原因、每筆突變仍套用得上。
+
+| # | Contract | When violated | Checks |
+|---|---|---|---|
+| C1 | archive.json: one line per item, only ITEM_FIELDS written; feed copies live in memory only; saves are throttled and the end of a run always writes | scratch fields or full feed text get committed and published; the diff becomes unreadable | `check_jsonio`、`check_scratch_never_left`、`check_throttled_save` |
+| C2 | the id formula is fixed; when url canonicalisation changes, ids are recomputed and duplicates merged, a colliding id never overwrites | the same story shows up twice, or one item overwrites another | `check_merge_and_id`、`check_archive_rekey_collision`、`check_firstory_host` |
+| C3 | a summary is left blank only for the item's own nature; blocked, timed out, over budget or missing packages stay pending | a transient failure becomes a permanent blank and the item never gets a summary | `check_asr_permanence`、`check_podcast_blank_is_saved`、`check_transcript_without_content_is_final`、`check_douban_waits_for_a_copy` |
+| C4 | environment variables are read by store.Config only; import reads no environment; page chrome means "no body", never "blocked" | tests and workflows see different settings; a chrome-only page pauses a whole site | `check_config`、`check_refactor_contracts` |
+| C5 | rules.json has three sections and every rule compiles on its own | one bad rule disables a whole rule group | `check_rules_file`、`check_boilerplate_rules_compile_alone` |
+| C6 | summarize routes (douban, youtube, podcast, feed, fetch), and feed copies exist only within the collecting process | an item takes the wrong route: a page is fetched that should not be, or an item waiting for a copy is blanked | `check_routes_douban_blogspot`、`check_feed_images`、`check_collect_then_summarize`、`check_offline_only` |
+| C7 | fetches run in parallel across hosts, one at a time per host; a refusal pauses that host for the run | concurrent requests to one site get us blocked | `check_parallel_fetch`、`check_blocked_host_paused` |
+| C8 | FALLBACKS decides which third parties see a url; every attempt is logged | urls go to third parties nobody agreed to; their value cannot be measured | `check_fallback_switch_and_log` |
+| C9 | summary QC and qc_gate before writing; each item is refetched at most once | bad summaries are published, or an item is refetched in an endless loop | `check_summary_qc`、`check_index_gate`、`check_index_within_run`、`check_backfill_qc_only` |
+| C10 | the full backfill runs only when the rules hash changes | every run re-processes the whole archive, or stored summaries never catch up with new rules | `check_backfill_once_per_rules` |
+| C11 | summary extraction: paragraph scope, <code> slicing, line breaks kept | summaries pick up navigation or code, or lose their line breaks | `check_text`、`check_summary_lines`、`check_strip_code_edges`、`check_paragraph_scopes` |
+| C12 | decoding order and mojibake detection; mojibake is never summarised or translated | mojibake is "translated" into nonsense and published | `check_encoding`、`check_large_non_utf8_body`、`check_language` |
+| C13 | translation: DeepL results already billed are kept, DeepL is disabled by status code; a gtx refusal is not re-sent | double billing; request volume doubles while the service is refusing | `check_translate`、`check_translate_partial_and_refusals`、`check_deepl_fatal_by_status` |
+| C14 | thumbnails are judged by url only, cloud resize parameters stripped, deny list applied | logos and ads become thumbnails | `check_thumbs`、`check_thumb_clean` |
+| C15 | subtitle track priority, one .vtt per id, adjacent duplicate cues merged | the summary uses a translation of a translation; an old file shadows a new one | `check_subtitle_priority`、`check_vtt_and_process` |
+| C16 | each video is extracted once (--load-info-json) | YouTube requests double and rate limiting gets more likely | `check_subtitle_from_info_json` |
+| C17 | expired cookies are recognised only from specific yt-dlp stderr messages; status.json changes only after a YouTube probe | a hostile video title stops the run; a podcast-only run misreports the cookies | `check_cookies_rejected`、`check_cookies_status`、`check_status_ignores_podcasts` |
+| C18 | is_upcoming / is_live videos are skipped right after the probe, no length written | a download that must fail is retried daily; a length that is not the video's is stored | `check_not_yet_available` |
+| C19 | members-only videos get BLANK_SUMMARY and are not a cookies failure | a video we can never open is retried every day | `check_members_only` |
+| C20 | podcast duration comes only from duration fields; after ASR length is the measured audio; an episode page without audio is blanked and saved | the publish time is taken as the duration (about 20x) and the episode is never transcribed for exceeding the cap | `check_podcast`、`check_firstory_duration` |
+| C21 | every connection goes through net: public addresses only, every hop re-checked, credentials dropped across origins, refusals not retried, a 303 does not leak into retries, audio downloads use the same path | SSRF: internal content is summarised and published; the API key follows a redirect off-site | `check_security`、`check_redirect_drops_credentials`、`check_refusal_is_not_retried`、`check_303_does_not_leak_into_retry`、`check_transport`、`check_download_guard` |
+| C22 | TLS certificates are always verified (plain and impersonated) | a man in the middle can feed us anything | `check_tls_verified` |
+| C23 | every parser of remote text runs in linear time | one hostile page stalls the run for hours | `check_no_backtracking`、`check_tag_text_linear`、`check_offsets_survive_unicode_case` |
+| C24 | feedparser only ever receives a stream | a body is taken as a local path or url and reads files on the runner | `check_feed_body_is_data` |
+| C25 | yt-dlp children get allowlisted environment variables only; the url goes after -- | secrets leak to the child; a url is executed as an option | `check_child_env`、`check_security` |
+| C26 | channel names and ids taken from pages are allowlist-validated before building a url | a remote string becomes an arbitrary url | `check_telegram_channels`、`check_youtube_channel_urls`、`check_bridge_whitelist` |
+| C27 | the inbox accepts only safe urls within retention; collect only reads it | conflicts with the reader writing mid-run; javascript: and similar urls get stored | `check_inbox` |
+| C28 | the OPML is decoded in memory only | the subscription list lands on disk and gets committed | `check_opml_secret` |
+| C29 | scraped sources are off by default; The Paper takes only the article's own body and reads dates as Beijing time | unintended scraping; a summary mixes in another article | `check_scraped_sources_switch`、`check_bestblogs`、`check_thepaper_body`、`check_thepaper_pending_refetched`、`check_thepaper_dates` |
+| C30 | the language header is sent; the browser fingerprint carries only its own headers | the wrong language version is served; a mismatched fingerprint gets blocked | `check_accept_language` |
+| C31 | the CLI subcommands work; --dry-run writes nothing | maintenance commands are found broken only when needed | `check_cli_subcommands` |
+| C32 | CONTRACTS and the checks agree; every mutation still applies | rules sit in a table with no check behind them; mutations rot into no-ops unnoticed | `check_contracts` |
+| C33 | code comments carry no development history | "what happens if this is written otherwise" is crowded out by the story of how it got this way | `check_doc_history` |
+| C34 | workflows: permissions {}, persist-credentials false, actions pinned by SHA, one concurrency group | the token leaks, or concurrent writes overwrite each other | not automated: selftest does not parse the workflow yml (ARCHITECTURE.md §10) |
+| C35 | only YouTube *videos* (a valid 11-character id from store.youtube_video_id) reach media and the youtube route; the url yt-dlp gets is always rebuilt from the id (youtube_watch_url) and names that one video; stored video urls carry no list, index, si or t parameters | a ?list= url makes the probe walk the whole playlist until it times out, every day; one video shows up several times under different share parameters | `check_youtube_video_url`、`check_security` |
+| C36 | a YouTube audio download that fails is tried again by the next way in AUDIO_LADDER (yt-dlp's own client choice first, no user agent override), within one timeout; only a closed video (members only, geo-blocked), refused cookies or a timeout end it early; failures name each attempt's ERROR line | one refused player client (HTTP 403) leaves every video without captions pending for good, and upgrading yt-dlp changes nothing because its client choice is overridden; the log shows a country list instead of the reason | `check_audio_ladder` |
+| C37 | podcast audio downloads resume a broken or stalled transfer from the bytes on disk (a server ignoring Range starts the file over), retry a refused plain client once with the browser fingerprint, and report why they failed; past the run time limit no further ASR job starts | a long episode on a slow CDN never arrives in one piece and stays pending for good, with a log line that fits every cause; slow downloads run the job into its timeout and nothing is committed | `check_download_resume`、`check_audio_ladder` |
+
+### 11.1 檢查本身怎麼被驗證
+
+全綠只證明「目前沒有違反」，不證明「檢查抓得到違反」。`selftest.py` 的 `MUTATIONS` 每一筆在 `scripts/` 的暫存副本裡弄壞一條契約（把某段程式換成錯的寫法），再單獨執行負責的檢查，那個檢查必須失敗；沒有失敗就是一條什麼都沒擋住的檢查，整個 selftest 失敗。突變只在其他檢查全部通過時執行（否則任何突變都會「被抓到」）。
+
+每筆突變的原始片段必須在檔案中恰好出現一次（`check_contracts` 確認）：程式改寫之後，突變不會靜靜變成沒有作用的替換。新增契約或修正一個 bug 時，同時加一筆能重現那個 bug 的突變。
+
+### 11.2 「跳過」等於沒有防護
+
+檢查在缺相依、缺檔案或環境不符時，一律失敗，不印「跳過」後回傳成功：那樣在乾淨環境上整條契約從未執行，輸出卻是 ok。需要放寬的情況寫成明確的參數，不寫成靜默的 `return`。
+
+## 12. 開發過程紀錄
+
+開發歷史不寫在程式註解（`check_doc_history`，CI 執行）與本文件其他地方（`selftest.py --docs`，只在本機執行）；這一節是唯一的例外。寫法：**以 A 方法會有 B 結果，改用 C 方法結果為 D**。每一則都要回答「下一個人為什麼需要知道」，答不出來就不寫。
+
+| 主題 | 過程 |
 |---|---|
-| 摘要品質 | 選錯句子不會報錯，只能人工抽樣 |
-| 站台改版 | 表現為 `↛` 比例上升或摘要變導覽列文字 |
-| 第三方服務 | reader proxy、Wayback、gtx 皆無 SLA |
-| 大量匯入 | 單輪新增遠超 `MAX_ITEMS` 時，未處理條目的 feed 副本隨行程結束而消失 |
-| 中途被殺 | 存檔節流，job 逾時被強制終止最多遺失約 30 秒的進度（下輪重做；寫入是原子的，檔案不會損壞） |
-| podcast 辨識品質 | `downloadsub.yml` 使用 `WHISPER_MODEL=small`（程式預設仍為 `base`）；比 `base` 中文錯字少，但轉錄速度約慢一倍，`MAX_ASR_TOTAL_SECONDS` 以音訊秒數計，不隨模型調整，實際耗時需對照 job 時限 |
-| podcast 失敗無上限 | ASR 一直失敗的單集（音檔下載失敗、格式無法解碼、超過 3 小時上限）或單集頁一直讀不到的，每天重試，永遠沒有摘要，直到留存期滿被移出 archive。失敗不計入 ASR 預算（預算只算成功的音訊秒數），但下載與轉錄失敗每次都耗用 workflow 執行時間；已知時長超過上限的在下載前就被擋下，幾乎不耗時。`downloadsub.yml` 停擺或預算長期被佔滿時亦同 |
+| Firstory 時長 | 以頁面文字裡第一個 `HH:MM:SS` 當時長，抓到的是發布時間（下午兩點發布 → 51788 秒，約實際的 20 倍）；而頁面通常有音檔網址，RSS 的 `itunes:duration` 從未被讀。凌晨三點後發布的單集因此全部超過 3 小時上限，永遠不轉錄。改為只取字面上就是時長的欄位，並在 ASR 後寫入實測長度。新增 podcast 來源時，時長不要從版面文字猜。 |
+| 首映前的影片 | 只認 `is_live`，`is_upcoming` 的影片沒有字幕、音訊下載必定失敗，每天耗掉約 9 次 YouTube 請求。在探測處統一判斷「尚未有錄影」後，下游的直播分支一併刪除：同一個判斷散在多處時，新增一種狀態只會補到其中一處。 |
+| 檢查的有效性 | 契約表建立後第一次跑突變測試，13 筆中有 2 筆沒被抓到：`check_child_env` 測的 secret 名稱都不在白名單內，所以白名單之後的第二道過濾（擋 `DENO_AUTH_TOKENS` 這類名稱合法、內容是 secret 的變數）拿掉也照樣通過；`textproc.garbled` 的 U+FFFD 規則拿掉後，QC 測試仍由別的規則判成亂碼而通過，攝入端的那條規則沒有任何測試。兩者補上直接的斷言後都會被抓到。測試通過不代表它測到了想測的那一條分支。 |
+| YouTube 播放清單網址 | 閱讀器送進來的 `youtu.be/ID?list=…` 原樣交給 yt-dlp，探測展開整個播放清單、逐支印出「Only images are available」，90 秒逾時後失敗，每天重來。改為只把合格影片 id 認作 YouTube 影片，yt-dlp 的網址一律由 id 重建，存下的網址也去掉播放清單參數。外部字串交給子行程前，要從驗證過的欄位重建，而不是只確認它「看起來像」。 |
+| 會員限定影片 | 探測失敗只印「probe failed」，看不出原因，也不分辨是影片性質還是暫時錯誤，於是每天重試。改為以單一規則表分類 yt-dlp 的永久錯誤，三個呼叫點共用；探測失敗的 log 附上 stderr。失敗訊息若不帶原因，就無法判斷它屬於哪一類。 |
+| YouTube 音訊 403 | 音訊下載固定指定 `player_client=tv,web_safari,default` 並覆寫 `--user-agent`。從 log 判斷，格式來自清單中第一個 client（tv；yt-dlp 2026.10.26 對登入狀態的預設已不含它），串流網址萃取成功、下載時回 `HTTP Error 403`；更新 cookies、升級 yt-dlp 都沒有差別，因為被拒的不是帳號，而升級改進的預設 client 選擇正好被這個參數蓋掉。改為階梯：先用 yt-dlp 的預設，失敗再換協定（HLS）、換格式（18）、換 client，並拿掉音訊下載的 UA 覆寫。寫死在參數裡的 client 清單會停在當時可用的那一組；要指定時，把它放在預設之後當後備，而不是取代預設。 |
+| 失敗訊息的尾巴 | 失敗 log 取輸出的最後 1500 字元。區域限制的錯誤訊息後面跟著兩百多個國家名稱，原因本身被擠出視窗，log 只剩國家清單。改為只取 stderr 的 `ERROR:` 行、每行截斷。截尾巴假設重點在最後，錯誤訊息的重點在開頭。 |
+| Podcast 音檔下載 | 一次請求、失敗重來一次、每次從零開始，失敗訊息是「failed, timed out or too large」。47 分鐘的單集從 runner 連到對岸的 CDN，中途斷線就前功盡棄，而 log 分不出是被拒、太慢還是斷線，也就無從決定對策。改為續傳並回報原因。同時加上整輪時鐘上限，因為放寬下載時限後，連續幾集慢速下載足以讓 job 撞上 340 分鐘而整輪不 commit。 |
