@@ -11,8 +11,8 @@
 |---|---|
 | `store.py` | 摘要空值常數、id／語言碼驗證、**`Config`（唯一讀環境變數的地方，`store.configure()` 由入口呼叫，各模組在呼叫時讀 `store.CFG`，不在 import 時讀）**、`rules.json` 讀取（`rules()`、`site()`）、host 比對與網址約定（`is_youtube`、`is_episode`）、日期解析、`__NEXT_DATA__` 讀取、archive 讀寫（`save_doc` 欄位白名單）、字幕檔約定（軌道優先序、`pick_subtitle`、`prune_subtitles`：每個 id 只留一個 `.vtt`） |
 | `net.py` | **唯一的對外連線**（`get`、`request`、`download`，見 §8）與解碼（`decode_body`） |
-| `textproc.py` | 唯一一套 HTML 工具：串流讀取器（同一個 `HTMLParser` 核心 `_Stream`，三種文字輸出：`html_to_text` 全部區塊、`region_text` 限定 `main`／`article`／`body` 並略過 nav／header／footer、`paragraph_text` 只取 `<p>`／`<li>`，以第一個含段落的 `article`、否則 `main` 限定範圍，略過區（aside 等）裡的 article 不算；同一核心的 `elements` 回傳 `Doc`（元素清單、`first`、`text`），給需要原始 HTML 片段的地方——澎湃正文、`strip_code`——元素起訖位置；`strip_code` 只在原始碼上切片、不重新序列化，含 `pre`／`samp`／`kbd` 的 `<code>` 整段移除）、`meta_tags`、`meta_first`、`page_title`；頁面抽取（`from_html`：trafilatura → 段落退路 → 介面文字判定 `chrome_only`，以及 `strip_code`、`meta_description`、`unescape`、`MIN_BODY`）；`sanitize_markup`、`JUNK_RE`；OpenCC、語言判斷、亂碼修復與偵測（`garbled` 擋輸入；`diagnose` 給 QC，範圍較廣）、DeepL／gtx 翻譯；VTT 轉文字、樣板移除（`rules.json` 的 `boilerplate`）、抽取式摘要（`build`） |
-| `collect.py` | 入口一（`updatenews.yml`）。OPML（檔案或 `FOLLOW_OPML_B64*` secret）／RSS、Telegram／即刻、YouTube 頻道、`data/inbox.json`、抓取來源（BestBlogs、澎湃，受 `SCRAPED_SOURCES` 控制）→ 正規化 url、id、去重、留存；接著在同一行程跑 `summarize.run`（`--no-summarize` 時不跑） |
+| `textproc.py` | 唯一一套 HTML 工具：串流讀取器（同一個 `HTMLParser` 核心 `_Stream`，三種文字輸出：`html_to_text` 全部區塊、`region_text` 限定 `main`／`article`／`body` 並略過 nav／header／footer、`paragraph_text` 只取 `<p>`／`<li>`，以第一個含段落的 `article`、否則 `main` 限定範圍，略過區（aside 等）裡的 article 不算；同一核心的 `elements` 回傳 `Doc`（元素清單、`first`、`text`），給需要原始 HTML 片段的地方——`strip_code`——元素起訖位置；`strip_code` 只在原始碼上切片、不重新序列化，含 `pre`／`samp`／`kbd` 的 `<code>` 整段移除）、`meta_tags`、`meta_first`、`page_title`；頁面抽取（`from_html`：trafilatura → 段落退路 → 介面文字判定 `chrome_only`，以及 `strip_code`、`meta_description`、`unescape`、`MIN_BODY`）；`sanitize_markup`、`JUNK_RE`；OpenCC、語言判斷、亂碼修復與偵測（`garbled` 擋輸入；`diagnose` 給 QC，範圍較廣）、DeepL／gtx 翻譯；VTT 轉文字、樣板移除（`rules.json` 的 `boilerplate`）、抽取式摘要（`build`） |
+| `collect.py` | 入口一（`updatenews.yml`）。OPML（檔案或 `FOLLOW_OPML_B64*` secret）／RSS、Telegram／即刻、YouTube 頻道、`data/inbox.json`、預設訂閱（`DEFAULT_FEEDS`）→ 正規化 url、id、去重、留存；接著在同一行程跑 `summarize.run`（`--no-summarize` 時不跑） |
 | `summarize.py` | 縮圖過濾（`thumb_*`）、取文退路（`fetch_article`，抽取本身在 `textproc.from_html`）、摘要 QC（`qc_*`，只輸出到 log）、路由 pending 條目、跨 host 並行抓取、回填；`run()` 供兩個入口呼叫；命令列是維護工具（`backfill`、`mine`） |
 | `media.py` | 入口二（`downloadsub.yml`）。yt-dlp 字幕（子行程只拿白名單環境變數）、faster-whisper ASR 後備；podcast 單集頁（小宇宙、Firstory）→ 音檔網址與時長（`resolve_episode`）→ ASR；`data/status.json`；最後在同一行程摘要新逐字稿 |
 | `selftest.py` | 離線契約檢查（§11，契約表 `CONTRACTS` 在這個檔案裡；只讀 `scripts/`，不讀本文件）；兩個 workflow 都在碰資料前先跑。每個檢查前重讀設定，單一檢查崩潰會記為失敗而不中斷其他檢查；失敗訊息標出是哪個檢查。其他檢查全部通過後執行突變測試（§11.1） |
@@ -77,14 +77,11 @@ YouTube cookies 被拒（yt-dlp 的 stderr 含 `cookies`）時寫 `expired`；�
 - **YouTube**：`/channel/UC…` 與 `playlist?list=…` 直接換成 RSS 網址；`/@handle`、`/c/…`、`/user/…` 抓取時先讀頁面，
   從 RSS `<link>`、canonical `<link>` 或 `"externalId"` 取出格式正確的頻道 id 再抓 RSS，取不到記為該 feed 失敗。
 
-### 抓取來源（無 RSS）：BestBlogs、澎湃
+### 預設訂閱（`DEFAULT_FEEDS`）
 
-由 `updatenews.yml` 頂層的 `SCRAPED_SOURCES` 控制：`on`（或 `1`、`true`、`yes`）才執行，其他值或未設定都不執行，**預設 `off`**。selftest 一律強制關閉，不受 workflow 設定影響。
+`collect.py` 的 `DEFAULT_FEEDS` 列出預設訂閱（目前是 TechNews、@TheNewsLens），一律和 OPML 一起蒐集，不受任何開關影響。依 `xmlUrl` 去重，OPML 裡已有同一個網址時，以 OPML 的標題與分類為準，所以重複列出不會變成兩份。要增減預設訂閱，直接改這份清單。
 
-- **BestBlogs**（`www.bestblogs.dev/newsletter/issueN`）：archive 已有期數時，從最大期數往上探測，連續 3 期不存在就停；沒有任何期數時，先倍增再二分找出最新一期，再往回取留存期內的期數（最多 30 期）。內文去掉導覽列等介面元素後，轉成純文字作為 feed 副本。各語言版本的網址一律正規化成同一個。
-- **澎湃**（`THEPAPER_CHANNELS`，目前是上海書評頻道）：從頻道頁的 `__NEXT_DATA__` 取得文章列表，失敗時改用頁面上的連結。只有新條目或仍為 pending 的條目才會抓文章頁，而且只取該篇自己的內文（依 `contId` 比對），日期沒有時區時視為北京時間。
-- 兩個網站都在 `FEED_FIRST_HOSTS` 中，`summarize` 只使用 feed 副本，不會再抓頁面。
-- 網址正規化規則（`canonical_url`）不受開關影響，所以切換開關不會改變 id。關閉之後，既有條目照常依留存期限淘汰。
+原本的抓取來源（BestBlogs、澎湃，無 RSS）已移除；`SCRAPED_SOURCES` 不再有作用。
 
 ### `data/inbox.json`
 
@@ -270,7 +267,7 @@ pip 未用雜湊驗證、間接依賴未釘版；服務映像只釘 tag 未釘 d
 
 環境變數（全部由 `store.Config.from_env` 讀取；數字格式錯誤時印出警告並用預設值）：
 - 路徑：`DATA_DIR`（預設 `data`）；`archive.json`、`subtitles/`、`status.json`、`inbox.json` 都在其下
-- 蒐集與摘要：`ARCHIVE_DAYS` `RSS_MAX_FEEDS` `SCRAPED_SOURCES` `MAX_ITEMS` `TIME_BUDGET_SECONDS` `TRANSLATE` `SUMMARY_RATIO` `SUMMARY_MAX` `FALLBACKS` `DEEPL_API_KEY`（程式預設：`MAX_ITEMS` 200、`RSS_MAX_FEEDS` 400）
+- 蒐集與摘要：`ARCHIVE_DAYS` `RSS_MAX_FEEDS` `MAX_ITEMS` `TIME_BUDGET_SECONDS` `TRANSLATE` `SUMMARY_RATIO` `SUMMARY_MAX` `FALLBACKS` `DEEPL_API_KEY`（程式預設：`MAX_ITEMS` 200、`RSS_MAX_FEEDS` 400）
 - 字幕：`COOKIES_PATH`（檔案不存在就不帶 cookies）`MAX_ASR_TOTAL_SECONDS`（預設 28800）`MAX_TRANSCRIBE`（預設 40）`MAX_ASR_DURATION_SECONDS`（預設 10800）`WHISPER_MODEL` `WHISPER_COMPUTE_TYPE`；每輪最多看 400 個條目（`media.Limits`），依發布時間新到舊
 - OPML secret（`FOLLOW_OPML_B64*`）不進 `Config`，由 `collect.opml_from_env` 直接在記憶體解開
 
@@ -337,7 +334,7 @@ Secrets：`FOLLOW_OPML_B64`（必要時加 `_2`…`_5`）、`DEEPL_API_KEY`、`Y
 | C26 | channel names and ids taken from pages are allowlist-validated before building a url | a remote string becomes an arbitrary url | `check_telegram_channels`、`check_youtube_channel_urls`、`check_bridge_whitelist` |
 | C27 | the inbox accepts only safe urls within retention; collect only reads it | conflicts with the reader writing mid-run; javascript: and similar urls get stored | `check_inbox` |
 | C28 | the OPML is decoded in memory only | the subscription list lands on disk and gets committed | `check_opml_secret` |
-| C29 | scraped sources are off by default; The Paper takes only the article's own body and reads dates as Beijing time | unintended scraping; a summary mixes in another article | `check_scraped_sources_switch`、`check_bestblogs`、`check_thepaper_body`、`check_thepaper_pending_refetched`、`check_thepaper_dates` |
+| C29 | default feeds are collected with the OPML, once, and the OPML entry wins | a default doubles a subscription or overrides its title and category | `check_default_feeds` |
 | C30 | the language header is sent; the browser fingerprint carries only its own headers | the wrong language version is served; a mismatched fingerprint gets blocked | `check_accept_language` |
 | C31 | the CLI subcommands work; --dry-run writes nothing | maintenance commands are found broken only when needed | `check_cli_subcommands` |
 | C32 | CONTRACTS and the checks agree; every mutation still applies | rules sit in a table with no check behind them; mutations rot into no-ops unnoticed | `check_contracts` |

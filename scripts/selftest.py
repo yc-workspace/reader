@@ -50,8 +50,12 @@ def env(**kw):
 def collect(d, *args, opml=b'<opml><body/></opml>', **kw):
     """collect.main on data dir `d` with an OPML file (default: no feeds)."""
     (Path(d) / "f.opml").write_bytes(opml)
-    with env(DATA_DIR=d, **kw), contextlib.redirect_stdout(io.StringIO()):
-        return un.main(["--rss-opml", str(Path(d) / "f.opml"), *args])
+    real, un.DEFAULT_FEEDS = un.DEFAULT_FEEDS, ()      # offline: the default feeds are checked in check_default_feeds
+    try:
+        with env(DATA_DIR=d, **kw), contextlib.redirect_stdout(io.StringIO()):
+            return un.main(["--rss-opml", str(Path(d) / "f.opml"), *args])
+    finally:
+        un.DEFAULT_FEEDS = real
 
 
 def subs(archive, d, *args):
@@ -909,7 +913,7 @@ def check_opml_secret():
         eq(un.opml_from_env({"FOLLOW_OPML_B64": blob[:10], "FOLLOW_OPML_B64_2": blob[10:]}), opml,
            "split secret joins and decodes")
     eq(un.opml_from_env({}), b"", "no secret, nothing unpacked")
-    eq([f["url"] for f in un.read_opml(opml, 0)], ["https://a.example/rss"], "OPML read from bytes")
+    eq([f["url"] for f in un.read_opml(opml, 0)][:1], ["https://a.example/rss"], "OPML read from bytes")
     with tempfile.TemporaryDirectory() as d:
         old = {n: os.environ.pop(n, None) for n in un.OPML_SECRETS}
         try:
@@ -1576,113 +1580,19 @@ def check_podcast_blank_is_saved():
            "no audio on the episode page -> blank written to the archive")
 
 
-def check_bestblogs():
-    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
-    body = "".join(f"<p>第{i}篇：人工智慧模型在推理基準上取得進步，研究團隊公布了評測方法與資料集。</p>" for i in range(20))
-    page = lambda n, d: (f'<html><head><title>第{n}期 | BestBlogs.dev</title></head><body><nav>NAV</nav>'
-                         f'<main><h1>Newsletter {d}</h1>{body}<script>x()</script></main></body></html>')
-    dates = {n: (now - timedelta(days=7 * (40 - n))).strftime("%Y-%m-%d") for n in range(1, 41)}
-    seen = []
+def check_default_feeds():
+    """DEFAULT_FEEDS are collected next to the OPML; an OPML entry with the same xmlUrl wins; no duplicates."""
+    opml = b'<opml><body><outline text="X" xmlUrl="https://example.com/feed" category="c"/></body></opml>'
+    got = {f["title"]: f for f in un.read_opml(opml, 0)}
+    eq(sorted(got), sorted(["X", "TechNews", "@TheNewsLens"]), "OPML feed plus the default feeds")
+    eq(got["TechNews"]["url"], "https://technews.tw/feed/", "default RSS feed url")
+    eq(got["@TheNewsLens"]["category"], "新聞", "default feed category")
+    both = '<opml><body><outline text="我的科技" xmlUrl="https://technews.tw/feed/" category="自訂"/></body></opml>'.encode()
+    feeds = un.read_opml(both, 0)
+    eq(sum(f["url"] == "https://technews.tw/feed/" for f in feeds), 1, "a default already in the OPML is not doubled")
+    eq([(f["title"], f["category"]) for f in feeds if f["url"] == "https://technews.tw/feed/"], [("我的科技", "自訂")],
+       "the OPML entry wins over the default")
 
-    def fake_get(url, *a, **k):
-        seen.append(url)
-        n = int(url.rsplit("issue", 1)[1])
-        return net.Resp(200, page(n, dates[n]).encode(), {"content-type": "text/html"}, url) if n in dates \
-            else net.Resp(404, b"", {}, url)
-    real = un.net.get
-    un.net.get = fake_get
-    try:
-        raws = un.fetch_bestblogs({}, now, 60)
-        eq([int(r.url.rsplit("issue", 1)[1]) for r in raws], list(range(32, 41)),
-           "bestblogs: empty archive takes the latest issues inside retention only")
-        eq(len(seen) < 25, True, "bestblogs: latest issue found by bisection, not by walking from 1")
-        r = raws[-1]
-        eq((r.title, r.category, r.source, un.iso(r.published_at)), ("第40期", "tech", "BestBlogs", dates[40] + "T00:00:00Z"),
-           "bestblogs: title, labels, date from the page")
-        eq(("<" in r.content, "NAV" in r.content, "x()" in r.content, "第0篇" in r.content), (False, False, False, True),
-           "bestblogs: feed copy is plain text without chrome")
-        arch = {}
-        un.ingest(arch, raws, now)
-        seen.clear()
-        eq(un.fetch_bestblogs(arch, now, 60), [], "bestblogs: known issues are not emitted again")
-        eq(len(seen), un.BESTBLOGS_MISSES, "bestblogs: with issues known, only the next ones are probed")
-        dates[41] = now.strftime("%Y-%m-%d")
-        eq([r.url for r in un.fetch_bestblogs(arch, now, 60)], [f"{un.BESTBLOGS}/newsletter/issue41"],
-           "bestblogs: new issue found")
-    finally:
-        un.net.get = real
-    s = textproc.build(raws[-1].content, "feed")
-    eq(bool(s) and "<" not in s, True, "bestblogs: summary has no markup")
-    eq(un.canonical_url("https://bestblogs.dev/en/newsletter/issue007/"), f"{un.BESTBLOGS}/newsletter/issue7",
-       "bestblogs url canonical")
-    eq(summarize.route({"url": f"{un.BESTBLOGS}/newsletter/issue7", "feed_content": "x"}), "feed",
-       "bestblogs summarized from its copy")
-
-
-def check_thepaper_body():
-    """The Paper (thepaper.cn) article pages: the article's own body, as plain text, never another article's."""
-    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
-    own = "<p>" + "上海書評這一期討論城市記憶與出版史，作者回顧了三十年來的書店變遷。" * 12 + "</p>"
-    other = "<p>" + "推薦閱讀：另一篇完全不同的文章內容，篇幅更長。" * 40 + "</p>"
-    data = {"props": {"pageProps": {"detailData": {"contId": 123456, "content": own, "pubTimeLong": 1760300000000},
-                                    "recommend": [{"contId": 999999, "content": other}]}}}
-    page = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script></html>'
-    real = un.net.get
-    un.net.get = lambda url, *a, **k: net.Resp(200, page.encode(), {"content-type": "text/html"}, url)
-    try:
-        body, when, _ = un.thepaper_article("123456", now)
-    finally:
-        un.net.get = real
-    eq(("城市記憶" in body, "推薦閱讀" in body, "<p>" in body), (True, False, False), "thepaper: own contId body, plain text")
-    eq(when is not None, True, "thepaper: date from the article data")
-
-
-def check_scraped_sources_switch():
-    """BestBlogs and The Paper run only when SCRAPED_SOURCES is on (default off)."""
-    eq([store.env_flag(v) for v in (None, "", "off", "0", "false", "no", "maybe", "on", "ON", " 1 ", "true", "Yes")],
-       [False] * 7 + [True] * 5, "SCRAPED_SOURCES values; unset means off")
-    eq([store.env_flag(v, True) for v in (None, "", "off", "on")], [True, True, False, True], "on-by-default flags")
-    d = tempfile.mkdtemp()
-    calls = []
-    real = un.fetch_bestblogs, un.fetch_thepaper
-    un.fetch_bestblogs = lambda *a: calls.append("bestblogs") or []
-    un.fetch_thepaper = lambda *a: calls.append("thepaper") or []
-    try:
-        for on in ("off", "on"):
-            calls.clear()
-            collect(d, "--no-summarize", SCRAPED_SOURCES=on)
-            eq(calls, ["bestblogs", "thepaper"] if on == "on" else [], f"scraped sources with the switch {on}")
-    finally:
-        un.fetch_bestblogs, un.fetch_thepaper = real
-    eq(summarize.route({"url": f"{un.THEPAPER}/newsDetail_forward_123456", "feed_content": "x"}), "feed",
-       "thepaper summarized from its copy, page never fetched by summarize")
-    eq(un.canonical_url("https://bestblogs.dev/zh/newsletter/issue12"), f"{un.BESTBLOGS}/newsletter/issue12",
-       "the BestBlogs url rule holds with the switch off too (ids do not change when toggled)")
-
-
-def check_thepaper_pending_refetched():
-    """A The Paper item still pending is fetched again (feed copies are not saved);
-    one with a summary is not, and is re-emitted only to refresh last_seen_at."""
-    listing_page = ('<html><body><a href="/newsDetail_forward_111111">甲</a>'
-                    '<a href="/newsDetail_forward_222222">乙</a></body></html>')
-    fetched = []
-
-    def fake_get(url, *a, **k):
-        if "channel_" in url:
-            return net.Resp(200, listing_page.encode(), {}, url)
-        fetched.append(url.rsplit("_", 1)[1])
-        return net.Resp(200, b"<html></html>", {}, url)
-    url = lambda cid: f"{un.THEPAPER}/newsDetail_forward_{cid}"
-    archive = {"a": {"url": url("111111"), "summary": "已完成的摘要"}, "b": {"url": url("222222")}}
-    real = un.net.get
-    un.net.get = fake_get
-    try:
-        with contextlib.redirect_stdout(io.StringIO()):
-            raws = un.fetch_thepaper(archive)
-    finally:
-        un.net.get = real
-    eq((sorted(fetched), sorted(r.url for r in raws)), (["222222"], [url("111111"), url("222222")]),
-       "thepaper: pending item refetched, summarised one only re-listed")
 
 
 def check_transport():
@@ -2178,17 +2088,6 @@ def check_tag_text_linear():
                       {"id": "__NEXT_DATA__"}), '{"x":1}', "tag_text: unclosed tag before the real one")
 
 
-def check_thepaper_dates():
-    now = un.datetime.now(tz=store.UTC)
-    for v in (1760000000000, "1760000000000", "1760000000", 1760000000.0):
-        eq(store.iso(un._thepaper_date({"pubTimeLong": v}, now)), "2025-10-09T08:53:20Z", f"thepaper epoch {v!r}: UTC")
-    eq(store.iso(un._thepaper_date({"pubTime": "2026-10-12 08:30"}, now)), "2026-10-12T00:30:00Z", "thepaper bare: Beijing")
-    eq(store.iso(un._thepaper_date({"pubTime": "2026-10-12T08:30:00+08:00"}, now)), "2026-10-12T00:30:00Z",
-       "thepaper offset kept")
-    eq(store.iso(un._thepaper_date({"pubTime": "3小时前"}, now)), store.iso(now - un.timedelta(hours=3)),
-       "thepaper relative time")
-
-
 # ---- the checks themselves ------------------------------------------------
 # A green run only says nothing violates a contract today, not that its check
 # would notice a violation. Each mutation breaks one contract in a scratch
@@ -2387,9 +2286,9 @@ CONTRACTS = (
      'the subscription list lands on disk and gets committed',
      ('check_opml_secret',)),
     ('C29',
-     "scraped sources are off by default; The Paper takes only the article's own body and reads dates as Beijing time",
-     'unintended scraping; a summary mixes in another article',
-     ('check_scraped_sources_switch', 'check_bestblogs', 'check_thepaper_body', 'check_thepaper_pending_refetched', 'check_thepaper_dates',)),
+     'default feeds are collected with the OPML, once, and the OPML entry wins',
+     'a default doubles a subscription or overrides its title and category',
+     ('check_default_feeds',)),
     ('C30',
      'the language header is sent; the browser fingerprint carries only its own headers',
      'the wrong language version is served; a mismatched fingerprint gets blocked',
