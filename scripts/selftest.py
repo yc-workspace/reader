@@ -50,12 +50,8 @@ def env(**kw):
 def collect(d, *args, opml=b'<opml><body/></opml>', **kw):
     """collect.main on data dir `d` with an OPML file (default: no feeds)."""
     (Path(d) / "f.opml").write_bytes(opml)
-    real, un.DEFAULT_FEEDS = un.DEFAULT_FEEDS, ()      # offline: the default feeds are checked in check_default_feeds
-    try:
-        with env(DATA_DIR=d, **kw), contextlib.redirect_stdout(io.StringIO()):
-            return un.main(["--rss-opml", str(Path(d) / "f.opml"), *args])
-    finally:
-        un.DEFAULT_FEEDS = real
+    with env(DATA_DIR=d, **kw), contextlib.redirect_stdout(io.StringIO()):
+        return un.main(["--rss-opml", str(Path(d) / "f.opml"), *args])
 
 
 def subs(archive, d, *args):
@@ -913,7 +909,7 @@ def check_opml_secret():
         eq(un.opml_from_env({"FOLLOW_OPML_B64": blob[:10], "FOLLOW_OPML_B64_2": blob[10:]}), opml,
            "split secret joins and decodes")
     eq(un.opml_from_env({}), b"", "no secret, nothing unpacked")
-    eq([f["url"] for f in un.read_opml(opml, 0)][:1], ["https://a.example/rss"], "OPML read from bytes")
+    eq([f["url"] for f in un.read_opml(opml, 0)], ["https://a.example/rss"], "OPML read from bytes")
     with tempfile.TemporaryDirectory() as d:
         old = {n: os.environ.pop(n, None) for n in un.OPML_SECRETS}
         try:
@@ -1302,9 +1298,11 @@ def check_download_resume():
     """net.save against a local server that breaks transfers the way a far
     CDN does: the connection drops part-way (resumed with Range, the file is
     whole), the server ignores Range (the file starts over, never doubled),
-    it stalls (dropped after DOWNLOAD_STALL, resumed), or it refuses a plain
-    client (one more attempt with the browser fingerprint). A download that
-    cannot finish says why and leaves no file."""
+    it sends a fixed amount per connection and then nothing (the stall is cut,
+    the rest fetched in ranges that end before that point, and the next file
+    from that host starts that way), or it refuses a plain client (one more
+    attempt with the browser fingerprint). A download that cannot finish says
+    why and leaves no file."""
     import http.server, threading
     body = bytes(range(256)) * 1200             # 307200 bytes, every offset distinguishable
     seen = []
@@ -1317,32 +1315,37 @@ def check_download_resume():
             with contextlib.suppress(OSError):
                 super().handle()
 
+        def empty(self, code, headers=()):
+            self.send_response(code)
+            for k, v in headers:
+                self.send_header(k, v)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_GET(self):
             rng = self.headers.get("Range")
             seen.append((self.path, rng, self.headers.get("User-Agent")))
-            start = int(rng[6:-1]) if rng and self.path != "/norange" else 0
+            start, _, end = rng[6:].partition("-") if rng and self.path != "/norange" else ("0", "", "")
+            start, end = int(start), min(int(end) + 1 if end else len(body), len(body))
             if self.path == "/blocked" and self.headers.get("User-Agent") == net.UA:
-                self.send_response(403)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
+                return self.empty(403)
             if self.path == "/gone":
-                self.send_response(410)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            self.send_response(206 if start else 200)
-            self.send_header("Content-Length", str(len(body) - start))
-            if start:
-                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+                return self.empty(410)
+            if start >= len(body):
+                return self.empty(416, [("Content-Range", f"bytes */{len(body)}")])
+            partial = bool(rng) and self.path != "/norange"
+            self.send_response(206 if partial else 200)
+            self.send_header("Content-Length", str(end - start))
+            if partial:
+                self.send_header("Content-Range", f"bytes {start}-{end - 1}/{len(body)}")
             self.end_headers()
             n = sum(1 for path, *_ in seen if path == self.path)
-            if self.path in ("/drop", "/norange") and n <= 2:      # two broken transfers, then a whole one
+            if self.path in ("/drop", "/norange") and n <= 2:      # two broken transfers, then whole ones
                 self.wfile.write(body[start:start + 100_000])
                 self.wfile.flush()
                 self.connection.shutdown(2)
-            elif self.path == "/stall" and n == 1:
-                self.wfile.write(body[:50_000])
+            elif self.path.startswith("/meter") and end - start > 100_000:   # 100000 bytes per connection, then silence
+                self.wfile.write(body[start:start + 100_000])
                 self.wfile.flush()
                 time.sleep(15)
             elif self.path == "/never":
@@ -1350,28 +1353,44 @@ def check_download_resume():
                 self.wfile.flush()
                 self.connection.shutdown(2)
             else:
-                self.wfile.write(body[start:])
+                self.wfile.write(body[start:end])
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://t.test:{srv.server_address[1]}"
-    real, real_stall, real_sleep = net.public_addrs, net.DOWNLOAD_STALL, net.time.sleep
-    net.public_addrs = lambda h, p: ["127.0.0.1"] if h == "t.test" else real(h, p)
-    net.DOWNLOAD_STALL = 1
+    ranges = lambda path: [r for p_, r, _ in seen if p_ == path]
+    real = (net.public_addrs, net.DOWNLOAD_STALL, net.time.sleep, net.DOWNLOAD_MIN_CHUNK, net.DOWNLOAD_TRIES)
+    net.public_addrs = lambda h, p: ["127.0.0.1"] if h == "t.test" else real[0](h, p)
+    net.DOWNLOAD_STALL, net.DOWNLOAD_MIN_CHUNK = 1, 10_000
     try:
         with tempfile.TemporaryDirectory() as d:
             dest = Path(d) / "a.m4a"
+            net._CHUNKS.clear()
             eq((net.save(base + "/drop", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
                "dropped connections are resumed into a whole file")
-            eq([r for path, r, _ in seen if path == "/drop"], [None, "bytes=100000-", "bytes=200000-"],
-               "each resume asks for the bytes after those on disk")
+            eq(ranges("/drop")[:3], [None, "bytes=100000-149999", "bytes=150000-199999"],
+               "each resume asks for the bytes after those on disk, in ranges of half what the broken one delivered")
+            net._CHUNKS.clear()
             eq((net.save(base + "/norange", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
                "a server that ignores Range: the file starts over, not appended to")
+            net._CHUNKS.clear()
             t0 = time.monotonic()
-            eq((net.save(base + "/stall", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
-               "a stalled connection is dropped and resumed")
+            eq((net.save(base + "/meter", dest, 60, 10**6), dest.read_bytes() == body), ("", True),
+               "100000 bytes per connection, then silence: the whole file arrives")
             took = time.monotonic() - t0
-            eq(took < 12, True, f"the stall is cut before the server wakes up: {took:.1f}s")
+            eq(took < 13, True, f"one stall is waited out, not one per connection: {took:.1f}s")
+            eq(ranges("/meter"), [None, "bytes=100000-149999", "bytes=150000-199999", "bytes=200000-249999",
+                                  "bytes=250000-299999", "bytes=300000-349999"],
+               "after the stall: ranges that end before the point where the server goes silent")
+            t0 = time.monotonic()
+            eq((net.save(base + "/meter2", dest, 60, 10**6), dest.read_bytes() == body), ("", True),
+               "the next file from that host")
+            eq((ranges("/meter2")[0], time.monotonic() - t0 < 4), ("bytes=0-49999", True),
+               "starts in ranges at once, no stall to wait out")
+            net._CHUNKS[f"t.test"] = len(body) // 3        # the file ends exactly at a chunk boundary
+            eq((net.save(base + "/exact", dest, 30, 10**6), dest.read_bytes() == body, len(ranges("/exact"))),
+               ("", True, 3), "the last chunk ends the download (Content-Range total)")
+            net._CHUNKS.clear()
             eq((net.save(base + "/blocked", dest, 30, 10**6), dest.read_bytes() == body), ("", True),
                "refused as a plain client: fetched with the browser fingerprint")
             eq((net.save(base + "/gone", dest, 30, 10**6), dest.exists()), ("HTTP 410", False),
@@ -1380,16 +1399,13 @@ def check_download_resume():
             eq((why.startswith("timed out after 3s (0.0 MB in "), dest.exists()), (True, False),
                f"out of time says so, with the progress made: {why}")
             net.time.sleep = lambda s: None
-            n0 = len(seen)
-            net.DOWNLOAD_TRIES, tries = 3, net.DOWNLOAD_TRIES
-            try:
-                why = net.save(f"http://t.test:1/closed", dest, 30, 10**6)
-            finally:
-                net.DOWNLOAD_TRIES = tries
+            n0, net.DOWNLOAD_TRIES = len(seen), 3
+            why = net.save("http://t.test:1/closed", dest, 30, 10**6)
             eq((why.startswith("gave up after 3 attempts without progress"), dest.exists(), len(seen) - n0),
                (True, False, 0), f"no progress at all gives up, not until the deadline: {why}")
     finally:
-        net.public_addrs, net.DOWNLOAD_STALL, net.time.sleep = real, real_stall, real_sleep
+        net.public_addrs, net.DOWNLOAD_STALL, net.time.sleep, net.DOWNLOAD_MIN_CHUNK, net.DOWNLOAD_TRIES = real
+        net._CHUNKS.clear()
         srv.shutdown()
 
 
@@ -1408,9 +1424,10 @@ def check_audio_ladder():
        "ladder: the first way leaves the player clients to yt-dlp")
     real = ds.run_cmd
 
-    def run(replies):
+    def run(replies, worked=()):
         """Play `replies` (rc, stderr, writes a file?) in order; return (result or exception, commands)."""
         cmds = []
+        ds._audio_worked[:] = worked
 
         def fake(cmd, timeout):
             rc, err, writes = replies[len(cmds)]
@@ -1429,13 +1446,20 @@ def check_audio_ladder():
         finally:
             ds.run_cmd = real
         return got, cmds
+    way = lambda cmd: next(n for n, args in ds.AUDIO_LADDER
+                           if cmd[:cmd.index("-o")] == ds.ytdlp(Path("/c.txt"), url, *args)[:-2])
 
     got, cmds = run([(1, e403, False), (0, "", True)])
     eq(got, ("audio.m4a", b"audio", ["audio.m4a"]), "ladder: the second way's file, the first way's leftovers removed")
     eq([("player_client=web_safari" in " ".join(c), "--user-agent" in c, c[-2:]) for c in cmds],
        [(False, False, ["--", url]), (True, False, ["--", url])],
        "ladder: 403 on the default clients -> HLS; no user agent override; url after --")
+    eq((ds._audio_worked, [way(c) for c in cmds]), (["hls"], ["default", "hls"]), "ladder: the way that worked is remembered")
+    got, cmds = run([(1, e403, False), (0, "", True)], worked=["premerged"])
+    eq([way(c) for c in cmds], ["premerged", "default"],
+       "ladder: the remembered way goes first for the next video, the rest keep their order")
     got, cmds = run([(1, e403, False)] * len(ds.AUDIO_LADDER))
+    eq([way(c) for c in cmds], [n for n, _ in ds.AUDIO_LADDER], "ladder: nothing remembered -> the table's order")
     eq((type(got), len(cmds), str(got).count("HTTP Error 403"), "WARNING" in str(got)),
        (RuntimeError, len(ds.AUDIO_LADDER), len(ds.AUDIO_LADDER), False),
        "ladder: every way tried once; the error lists each attempt's ERROR line")
@@ -1580,19 +1604,113 @@ def check_podcast_blank_is_saved():
            "no audio on the episode page -> blank written to the archive")
 
 
-def check_default_feeds():
-    """DEFAULT_FEEDS are collected next to the OPML; an OPML entry with the same xmlUrl wins; no duplicates."""
-    opml = b'<opml><body><outline text="X" xmlUrl="https://example.com/feed" category="c"/></body></opml>'
-    got = {f["title"]: f for f in un.read_opml(opml, 0)}
-    eq(sorted(got), sorted(["X", "TechNews", "@TheNewsLens"]), "OPML feed plus the default feeds")
-    eq(got["TechNews"]["url"], "https://technews.tw/feed/", "default RSS feed url")
-    eq(got["@TheNewsLens"]["category"], "新聞", "default feed category")
-    both = '<opml><body><outline text="我的科技" xmlUrl="https://technews.tw/feed/" category="自訂"/></body></opml>'.encode()
-    feeds = un.read_opml(both, 0)
-    eq(sum(f["url"] == "https://technews.tw/feed/" for f in feeds), 1, "a default already in the OPML is not doubled")
-    eq([(f["title"], f["category"]) for f in feeds if f["url"] == "https://technews.tw/feed/"], [("我的科技", "自訂")],
-       "the OPML entry wins over the default")
+def check_bestblogs():
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    body = "".join(f"<p>第{i}篇：人工智慧模型在推理基準上取得進步，研究團隊公布了評測方法與資料集。</p>" for i in range(20))
+    page = lambda n, d: (f'<html><head><title>第{n}期 | BestBlogs.dev</title></head><body><nav>NAV</nav>'
+                         f'<main><h1>Newsletter {d}</h1>{body}<script>x()</script></main></body></html>')
+    dates = {n: (now - timedelta(days=7 * (40 - n))).strftime("%Y-%m-%d") for n in range(1, 41)}
+    seen = []
 
+    def fake_get(url, *a, **k):
+        seen.append(url)
+        n = int(url.rsplit("issue", 1)[1])
+        return net.Resp(200, page(n, dates[n]).encode(), {"content-type": "text/html"}, url) if n in dates \
+            else net.Resp(404, b"", {}, url)
+    real = un.net.get
+    un.net.get = fake_get
+    try:
+        raws = un.fetch_bestblogs({}, now, 60)
+        eq([int(r.url.rsplit("issue", 1)[1]) for r in raws], list(range(32, 41)),
+           "bestblogs: empty archive takes the latest issues inside retention only")
+        eq(len(seen) < 25, True, "bestblogs: latest issue found by bisection, not by walking from 1")
+        r = raws[-1]
+        eq((r.title, r.category, r.source, un.iso(r.published_at)), ("第40期", "tech", "BestBlogs", dates[40] + "T00:00:00Z"),
+           "bestblogs: title, labels, date from the page")
+        eq(("<" in r.content, "NAV" in r.content, "x()" in r.content, "第0篇" in r.content), (False, False, False, True),
+           "bestblogs: feed copy is plain text without chrome")
+        arch = {}
+        un.ingest(arch, raws, now)
+        seen.clear()
+        eq(un.fetch_bestblogs(arch, now, 60), [], "bestblogs: known issues are not emitted again")
+        eq(len(seen), un.BESTBLOGS_MISSES, "bestblogs: with issues known, only the next ones are probed")
+        dates[41] = now.strftime("%Y-%m-%d")
+        eq([r.url for r in un.fetch_bestblogs(arch, now, 60)], [f"{un.BESTBLOGS}/newsletter/issue41"],
+           "bestblogs: new issue found")
+    finally:
+        un.net.get = real
+    s = textproc.build(raws[-1].content, "feed")
+    eq(bool(s) and "<" not in s, True, "bestblogs: summary has no markup")
+    eq(un.canonical_url("https://bestblogs.dev/en/newsletter/issue007/"), f"{un.BESTBLOGS}/newsletter/issue7",
+       "bestblogs url canonical")
+    eq(summarize.route({"url": f"{un.BESTBLOGS}/newsletter/issue7", "feed_content": "x"}), "feed",
+       "bestblogs summarized from its copy")
+
+
+def check_thepaper_body():
+    """The Paper (thepaper.cn) article pages: the article's own body, as plain text, never another article's."""
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    own = "<p>" + "上海書評這一期討論城市記憶與出版史，作者回顧了三十年來的書店變遷。" * 12 + "</p>"
+    other = "<p>" + "推薦閱讀：另一篇完全不同的文章內容，篇幅更長。" * 40 + "</p>"
+    data = {"props": {"pageProps": {"detailData": {"contId": 123456, "content": own, "pubTimeLong": 1760300000000},
+                                    "recommend": [{"contId": 999999, "content": other}]}}}
+    page = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script></html>'
+    real = un.net.get
+    un.net.get = lambda url, *a, **k: net.Resp(200, page.encode(), {"content-type": "text/html"}, url)
+    try:
+        body, when, _ = un.thepaper_article("123456", now)
+    finally:
+        un.net.get = real
+    eq(("城市記憶" in body, "推薦閱讀" in body, "<p>" in body), (True, False, False), "thepaper: own contId body, plain text")
+    eq(when is not None, True, "thepaper: date from the article data")
+
+
+def check_scraped_sources_switch():
+    """BestBlogs and The Paper run only when SCRAPED_SOURCES is on (default off)."""
+    eq([store.env_flag(v) for v in (None, "", "off", "0", "false", "no", "maybe", "on", "ON", " 1 ", "true", "Yes")],
+       [False] * 7 + [True] * 5, "SCRAPED_SOURCES values; unset means off")
+    eq([store.env_flag(v, True) for v in (None, "", "off", "on")], [True, True, False, True], "on-by-default flags")
+    d = tempfile.mkdtemp()
+    calls = []
+    real = un.fetch_bestblogs, un.fetch_thepaper
+    un.fetch_bestblogs = lambda *a: calls.append("bestblogs") or []
+    un.fetch_thepaper = lambda *a: calls.append("thepaper") or []
+    try:
+        for on in ("off", "on"):
+            calls.clear()
+            collect(d, "--no-summarize", SCRAPED_SOURCES=on)
+            eq(calls, ["bestblogs", "thepaper"] if on == "on" else [], f"scraped sources with the switch {on}")
+    finally:
+        un.fetch_bestblogs, un.fetch_thepaper = real
+    eq(summarize.route({"url": f"{un.THEPAPER}/newsDetail_forward_123456", "feed_content": "x"}), "feed",
+       "thepaper summarized from its copy, page never fetched by summarize")
+    eq(un.canonical_url("https://bestblogs.dev/zh/newsletter/issue12"), f"{un.BESTBLOGS}/newsletter/issue12",
+       "the BestBlogs url rule holds with the switch off too (ids do not change when toggled)")
+
+
+def check_thepaper_pending_refetched():
+    """A The Paper item still pending is fetched again (feed copies are not saved);
+    one with a summary is not, and is re-emitted only to refresh last_seen_at."""
+    listing_page = ('<html><body><a href="/newsDetail_forward_111111">甲</a>'
+                    '<a href="/newsDetail_forward_222222">乙</a></body></html>')
+    fetched = []
+
+    def fake_get(url, *a, **k):
+        if "channel_" in url:
+            return net.Resp(200, listing_page.encode(), {}, url)
+        fetched.append(url.rsplit("_", 1)[1])
+        return net.Resp(200, b"<html></html>", {}, url)
+    url = lambda cid: f"{un.THEPAPER}/newsDetail_forward_{cid}"
+    archive = {"a": {"url": url("111111"), "summary": "已完成的摘要"}, "b": {"url": url("222222")}}
+    real = un.net.get
+    un.net.get = fake_get
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            raws = un.fetch_thepaper(archive)
+    finally:
+        un.net.get = real
+    eq((sorted(fetched), sorted(r.url for r in raws)), (["222222"], [url("111111"), url("222222")]),
+       "thepaper: pending item refetched, summarised one only re-listed")
 
 
 def check_transport():
@@ -1849,6 +1967,26 @@ def check_subtitle_from_info_json():
             ds.run_cmd = fake([(1, False), (0, True)])
             ds.fetch_track(None, "https://youtu.be/xxxxxxxxxxx", out_dir, item, "en", True, "en", info, 5)
             eq((len(calls), calls[1][-2:]), (2, ["--", "https://www.youtube.com/watch?v=xxxxxxxxxxx"]), "failed info-json run retried from the url")
+            calls.clear()
+            (out_dir / f"{item}.en.en.vtt").unlink()
+
+            def empty(results):
+                def run(cmd, timeout):
+                    calls.append(cmd)
+                    write = results.pop(0)
+                    if write:
+                        (out_dir / f"{item}.en.en.vtt").write_text("WEBVTT")
+                        return 0, "", ""
+                    return 1, "", "ERROR: Did not get any data blocks"
+                return run
+            ds.run_cmd = empty([False, False])
+            rc, _, err = ds.fetch_track(None, "https://youtu.be/xxxxxxxxxxx", out_dir, item, "en", True, "en", info, 5)
+            eq((len(calls), ds.empty_track(err), any(not list(out_dir.glob("*.vtt")) for _ in [0])), (2, True, True),
+               "empty track: tried twice, reported as empty for the ASR fallback")
+            eq(any("player_client" in x or x == "--user-agent" for c in calls for x in c), False,
+               "subtitles use yt-dlp's own client choice")
+            eq(ds.empty_track("ERROR: Did not get any data blocks"), True, "empty track recognized")
+            eq(ds.empty_track("[info] title: Did not get any data blocks"), False, "only ERROR lines count")
         finally:
             ds.run_cmd = real
 
@@ -2088,6 +2226,17 @@ def check_tag_text_linear():
                       {"id": "__NEXT_DATA__"}), '{"x":1}', "tag_text: unclosed tag before the real one")
 
 
+def check_thepaper_dates():
+    now = un.datetime.now(tz=store.UTC)
+    for v in (1760000000000, "1760000000000", "1760000000", 1760000000.0):
+        eq(store.iso(un._thepaper_date({"pubTimeLong": v}, now)), "2025-10-09T08:53:20Z", f"thepaper epoch {v!r}: UTC")
+    eq(store.iso(un._thepaper_date({"pubTime": "2026-10-12 08:30"}, now)), "2026-10-12T00:30:00Z", "thepaper bare: Beijing")
+    eq(store.iso(un._thepaper_date({"pubTime": "2026-10-12T08:30:00+08:00"}, now)), "2026-10-12T00:30:00Z",
+       "thepaper offset kept")
+    eq(store.iso(un._thepaper_date({"pubTime": "3小时前"}, now)), store.iso(now - un.timedelta(hours=3)),
+       "thepaper relative time")
+
+
 # ---- the checks themselves ------------------------------------------------
 # A green run only says nothing violates a contract today, not that its check
 # would notice a violation. Each mutation breaks one contract in a scratch
@@ -2141,12 +2290,18 @@ MUTATIONS = (
     ("C36", "check_audio_ladder", "media.py",
      '("not available in the runner\'s country",',
      '("not available in the runner\'s country" * 0,'),
+    ("C36", "check_audio_ladder", "media.py",
+     '_audio_worked[:] = [name]',
+     '_audio_worked[:] = []'),
     ("C37", "check_download_resume", "net.py",
      'have = have if status == 206 else 0',
      'have = have'),
     ("C37", "check_download_resume", "net.py",
-     'h["Range"] = f"bytes={have}-"',
+     'h["Range"] = f"bytes={have}-{have + chunk - 1 if chunk else \'\'}"',
      'h["X-Range"] = f"bytes={have}-"'),
+    ("C37", "check_download_resume", "net.py",
+     'chunk = _CHUNKS[host] = min(chunk, size) if chunk else size',
+     'pass'),
     ("C37", "check_audio_ladder", "media.py",
      'return f"run time limit reached ({limit / 60:.0f} min)", False',
      'return None'),
@@ -2286,9 +2441,9 @@ CONTRACTS = (
      'the subscription list lands on disk and gets committed',
      ('check_opml_secret',)),
     ('C29',
-     'default feeds are collected with the OPML, once, and the OPML entry wins',
-     'a default doubles a subscription or overrides its title and category',
-     ('check_default_feeds',)),
+     "scraped sources are off by default; The Paper takes only the article's own body and reads dates as Beijing time",
+     'unintended scraping; a summary mixes in another article',
+     ('check_scraped_sources_switch', 'check_bestblogs', 'check_thepaper_body', 'check_thepaper_pending_refetched', 'check_thepaper_dates',)),
     ('C30',
      'the language header is sent; the browser fingerprint carries only its own headers',
      'the wrong language version is served; a mismatched fingerprint gets blocked',
@@ -2314,12 +2469,12 @@ CONTRACTS = (
      'a ?list= url makes the probe walk the whole playlist until it times out, every day; one video shows up several times under different share parameters',
      ('check_youtube_video_url', 'check_security',)),
     ('C36',
-     "a YouTube audio download that fails is tried again by the next way in AUDIO_LADDER (yt-dlp's own client choice first, no user agent override), within one timeout; only a closed video (members only, geo-blocked), refused cookies or a timeout end it early; failures name each attempt's ERROR line",
+     "a YouTube audio download that fails is tried again by the next way in AUDIO_LADDER (yt-dlp's own client choice first, no user agent override), within one timeout, and the way that worked goes first for the rest of the run; only a closed video (members only, geo-blocked), refused cookies or a timeout end it early; failures name each attempt's ERROR line",
      'one refused player client (HTTP 403) leaves every video without captions pending for good, and upgrading yt-dlp changes nothing because its client choice is overridden; the log shows a country list instead of the reason',
      ('check_audio_ladder',)),
     ('C37',
-     'podcast audio downloads resume a broken or stalled transfer from the bytes on disk (a server ignoring Range starts the file over), retry a refused plain client once with the browser fingerprint, and report why they failed; past the run time limit no further ASR job starts',
-     'a long episode on a slow CDN never arrives in one piece and stays pending for good, with a log line that fits every cause; slow downloads run the job into its timeout and nothing is committed',
+     'podcast audio downloads resume a broken or stalled transfer from the bytes on disk (a server ignoring Range starts the file over), in bounded ranges of half what the broken connection delivered, remembered per host, retry a refused plain client once with the browser fingerprint, and report why they failed; past the run time limit no further ASR job starts',
+     'a long episode never arrives in one piece, or crawls at one stall per MiB on a CDN that goes silent after a fixed amount per connection, and stays pending for good, with a log line that fits every cause; slow downloads run the job into its timeout and nothing is committed',
      ('check_download_resume', 'check_audio_ladder',)),
 )
 
