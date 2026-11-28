@@ -11,14 +11,14 @@
 |---|---|
 | `store.py` | 摘要空值常數、id／語言碼驗證、**`Config`（唯一讀環境變數的地方，`store.configure()` 由入口呼叫，各模組在呼叫時讀 `store.CFG`，不在 import 時讀）**、`rules.json` 讀取（`rules()`、`site()`）、host 比對與網址約定（`is_youtube`、`is_episode`）、日期解析、`__NEXT_DATA__` 讀取、archive 讀寫（`save_doc` 欄位白名單）、字幕檔約定（軌道優先序、`pick_subtitle`、`prune_subtitles`：每個 id 只留一個 `.vtt`） |
 | `net.py` | **唯一的對外連線**（`get`、`request`、`download`，見 §8）與解碼（`decode_body`） |
-| `textproc.py` | 唯一一套 HTML 工具：串流讀取器（同一個 `HTMLParser` 核心 `_Stream`，三種文字輸出：`html_to_text` 全部區塊、`region_text` 限定 `main`／`article`／`body` 並略過 nav／header／footer、`paragraph_text` 只取 `<p>`／`<li>`，以第一個含段落的 `article`、否則 `main` 限定範圍，略過區（aside 等）裡的 article 不算；同一核心的 `elements` 回傳 `Doc`（元素清單、`first`、`text`），給需要原始 HTML 片段的地方——`strip_code`——元素起訖位置；`strip_code` 只在原始碼上切片、不重新序列化，含 `pre`／`samp`／`kbd` 的 `<code>` 整段移除）、`meta_tags`、`meta_first`、`page_title`；頁面抽取（`from_html`：trafilatura → 段落退路 → 介面文字判定 `chrome_only`，以及 `strip_code`、`meta_description`、`unescape`、`MIN_BODY`）；`sanitize_markup`、`JUNK_RE`；OpenCC、語言判斷、亂碼修復與偵測（`garbled` 擋輸入；`diagnose` 給 QC，範圍較廣）、DeepL／gtx 翻譯；VTT 轉文字、樣板移除（`rules.json` 的 `boilerplate`）、抽取式摘要（`build`） |
-| `collect.py` | 入口一（`updatenews.yml`）。OPML（檔案或 `FOLLOW_OPML_B64*` secret）／RSS、Telegram／即刻、YouTube 頻道、`data/inbox.json`、預設訂閱（`DEFAULT_FEEDS`）→ 正規化 url、id、去重、留存；接著在同一行程跑 `summarize.run`（`--no-summarize` 時不跑） |
+| `textproc.py` | 唯一一套 HTML 工具：串流讀取器（同一個 `HTMLParser` 核心 `_Stream`，三種文字輸出：`html_to_text` 全部區塊、`region_text` 限定 `main`／`article`／`body` 並略過 nav／header／footer、`paragraph_text` 只取 `<p>`／`<li>`，以第一個含段落的 `article`、否則 `main` 限定範圍，略過區（aside 等）裡的 article 不算；同一核心的 `elements` 回傳 `Doc`（元素清單、`first`、`text`），給需要原始 HTML 片段的地方——澎湃正文、`strip_code`——元素起訖位置；`strip_code` 只在原始碼上切片、不重新序列化，含 `pre`／`samp`／`kbd` 的 `<code>` 整段移除）、`meta_tags`、`meta_first`、`page_title`；頁面抽取（`from_html`：trafilatura → 段落退路 → 介面文字判定 `chrome_only`，以及 `strip_code`、`meta_description`、`unescape`、`MIN_BODY`）；`sanitize_markup`、`JUNK_RE`；OpenCC、語言判斷、亂碼修復與偵測（`garbled` 擋輸入；`diagnose` 給 QC，範圍較廣）、DeepL／gtx 翻譯；VTT 轉文字、樣板移除（`rules.json` 的 `boilerplate`）、抽取式摘要（`build`） |
+| `collect.py` | 入口一（`updatenews.yml`）。OPML（檔案或 `FOLLOW_OPML_B64*` secret）／RSS、Telegram／即刻、YouTube 頻道、`data/inbox.json`、抓取來源（BestBlogs、澎湃，受 `SCRAPED_SOURCES` 控制）→ 正規化 url、id、去重、留存；接著在同一行程跑 `summarize.run`（`--no-summarize` 時不跑） |
 | `summarize.py` | 縮圖過濾（`thumb_*`）、取文退路（`fetch_article`，抽取本身在 `textproc.from_html`）、摘要 QC（`qc_*`，只輸出到 log）、路由 pending 條目、跨 host 並行抓取、回填；`run()` 供兩個入口呼叫；命令列是維護工具（`backfill`、`mine`） |
 | `media.py` | 入口二（`downloadsub.yml`）。yt-dlp 字幕（子行程只拿白名單環境變數）、faster-whisper ASR 後備；podcast 單集頁（小宇宙、Firstory）→ 音檔網址與時長（`resolve_episode`）→ ASR；`data/status.json`；最後在同一行程摘要新逐字稿 |
 | `selftest.py` | 離線契約檢查（§11，契約表 `CONTRACTS` 在這個檔案裡；只讀 `scripts/`，不讀本文件）；兩個 workflow 都在碰資料前先跑。每個檢查前重讀設定，單一檢查崩潰會記為失敗而不中斷其他檢查；失敗訊息標出是哪個檢查。其他檢查全部通過後執行突變測試（§11.1） |
 | `rules.json` | 唯一的資料檔，三個獨立區段：`boilerplate`（摘要時刪除的樣板）、`qc_chrome`（介面文字樣式：抽取時判定「沒有正文」、QC 判定「只剩介面文字」，兩處共用 `textproc.chrome_re`）、`sites`（站台表，在使用處以 `store.site()` 讀取，不在 import 時讀）。`boilerplate` 與 `qc_chrome` 不可合併：前者會在 QC 看到之前就把介面文字刪掉 |
 
-依賴：`requirements.txt`，兩個 workflow 共用，全部釘死版本（`updatenews.yml` 安裝時略過 faster-whisper、yt-dlp、bgutil 三行，那個 job 用不到）。網路只用 curl_cffi（本專案不直接使用 `requests`，它是 trafilatura 等套件的依賴）。
+依賴：`requirements.txt`，兩個 workflow 共用，全部釘死版本（yt-dlp 的 JS 執行環境 deno 也經 `yt-dlp[default,deno]` 由 pip 釘死，不另裝）（`updatenews.yml` 安裝時略過 faster-whisper、yt-dlp、bgutil 三行，那個 job 用不到）。網路只用 curl_cffi（本專案不直接使用 `requests`，它是 trafilatura 等套件的依賴）。
 
 內部 import（無循環；`store`、`net` 不依賴本專案任何模組）：
 
@@ -77,11 +77,14 @@ YouTube cookies 被拒（yt-dlp 的 stderr 含 `cookies`）時寫 `expired`；�
 - **YouTube**：`/channel/UC…` 與 `playlist?list=…` 直接換成 RSS 網址；`/@handle`、`/c/…`、`/user/…` 抓取時先讀頁面，
   從 RSS `<link>`、canonical `<link>` 或 `"externalId"` 取出格式正確的頻道 id 再抓 RSS，取不到記為該 feed 失敗。
 
-### 預設訂閱（`DEFAULT_FEEDS`）
+### 抓取來源（無 RSS）：BestBlogs、澎湃
 
-`collect.py` 的 `DEFAULT_FEEDS` 列出預設訂閱（目前是 TechNews、@TheNewsLens），一律和 OPML 一起蒐集，不受任何開關影響。依 `xmlUrl` 去重，OPML 裡已有同一個網址時，以 OPML 的標題與分類為準，所以重複列出不會變成兩份。要增減預設訂閱，直接改這份清單。
+由 `updatenews.yml` 頂層的 `SCRAPED_SOURCES` 控制：`on`（或 `1`、`true`、`yes`）才執行，其他值或未設定都不執行，**預設 `off`**。selftest 一律強制關閉，不受 workflow 設定影響。
 
-原本的抓取來源（BestBlogs、澎湃，無 RSS）已移除；`SCRAPED_SOURCES` 不再有作用。
+- **BestBlogs**（`www.bestblogs.dev/newsletter/issueN`）：archive 已有期數時，從最大期數往上探測，連續 3 期不存在就停；沒有任何期數時，先倍增再二分找出最新一期，再往回取留存期內的期數（最多 30 期）。內文去掉導覽列等介面元素後，轉成純文字作為 feed 副本。各語言版本的網址一律正規化成同一個。
+- **澎湃**（`THEPAPER_CHANNELS`，目前是上海書評頻道）：從頻道頁的 `__NEXT_DATA__` 取得文章列表，失敗時改用頁面上的連結。只有新條目或仍為 pending 的條目才會抓文章頁，而且只取該篇自己的內文（依 `contId` 比對），日期沒有時區時視為北京時間。
+- 兩個網站都在 `FEED_FIRST_HOSTS` 中，`summarize` 只使用 feed 副本，不會再抓頁面。
+- 網址正規化規則（`canonical_url`）不受開關影響，所以切換開關不會改變 id。關閉之後，既有條目照常依留存期限淘汰。
 
 ### `data/inbox.json`
 
@@ -188,22 +191,31 @@ log 為英文，依類別列出有問題的標題、處置與修改提示，不�
 
 ## 7. 字幕（`media.py`）
 
-- 只處理 YouTube 影片（`store.is_youtube` 即「網址含合格的影片 id」）；頻道頁、播放清單是一般網頁，走 `fetch`。yt-dlp 的每一次呼叫都經 `media.ytdlp`，網址由影片 id 重建成 `https://www.youtube.com/watch?v=ID`，不是存下的網址。
-- **探測成功、音訊下載卻回報 `Video unavailable`**：探測用的 web client 看得到影片，下載用的 client 都拒絕。這不能證明影片已不存在（區域、client 限制都會如此），依 C3 保持 pending；明確的永久原因才由 `RESTRICTED` 判定。
-- **音訊下載的後備階梯**（`AUDIO_LADDER`，`youtube_audio`）：串流網址萃取成功，下載時仍可能被拒（`HTTP Error 403`）；YouTube 拒絕哪個 player client、哪種協定每幾個月變一次，而 yt-dlp 下載失敗後不會自己改用別的格式。因此依序嘗試四種來源，第一個下載成功的即採用：`default`（不指定 `player_client`，交給 yt-dlp 對登入狀態的預設選擇，這是 yt-dlp 隨 YouTube 變動而更新的部分）→ `hls`（`web_safari` 的 m3u8，網址與存取檢查都和 https 格式不同）→ `premerged`（格式 18，唯一不需 PO token 的 https 格式）→ `tv`。四次嘗試共用同一個下載時限（剩不到 45 秒就不開始下一次）。只有換來源也不會改變的情況提前結束：影片對我們關閉（`Restricted`）、cookies 被拒、逾時。音訊下載不帶 `--user-agent`（各 client 送自己的 UA）；探測與字幕（`SUB_ARGS`）維持 `player_client=web` 與固定 UA。後備成功時 log `[AUDIO] <名稱> worked after: …`；全部失敗時 `[ASR-FAILED]` 逐一列出每次嘗試的 `ERROR:` 行（`why_failed`，每行最多 300 字元）。
-- 優先序：不需機翻 > 人工 > 語言。`live_chat` 不是字幕；`zh-Hant-TW` 是地區，`zh-Hant-en` 才是二次機翻。
-- 每個 id 只留一個 `.vtt`：下載或 ASR 成功後，以 `store.prune_subtitles` 刪除同 id 排名較低的檔案；每輪開始時也清一次既有的多餘檔案。排序仍由 `pick_subtitle` 決定。
-- ASR 輸出 VTT 時，與前一個 cue 文字相同的 cue 併入前一個（延長結束時間），避免 Whisper 幻覺迴圈把同一句寫成幾十個 cue；不相鄰的重複保留。
-- 檔名 `{id}.{原文語言}.{字幕語言}.vtt`；語言碼來自遠端，經 `safe_lang` 過濾才進檔名或 `--sub-langs`。
-- ASR 預算以音訊秒數計；撞牆且剩不到 10 分鐘就收工。另有整輪的時鐘上限（`Limits.max_run`，270 分鐘）：超過後不開始新的 ASR（log `run time limit reached`，保持 pending），因為 job 在 340 分鐘被終止時什麼都不會 commit。逾時殺整個行程群組並清半成品。
-- 開始前刪除 id 已不在 archive 裡的 `.vtt`。
-- **每支影片只萃取一次**：`--dump-json` 探測的結果存成暫存 info JSON（系統暫存目錄，權限 0700，用完即刪，永遠不在 repo 內：它可能含 session cookies），字幕以 `--load-info-json` 從它下載，避免重複萃取（那會多一次 YouTube 請求，也提高被限流的機會），也不需要固定等待。若這一步不是因為「沒有這個語言的字幕」而失敗（例如 PO token 過期），改用網址重試一次。
-- **cookies 失效**只認 yt-dlp 的特定訊息（`cookies are no longer valid`、`have been rotated`、`confirm you're not a bot`），且只看 stderr。年齡限制、會員影片的提示也會提到 `--cookies`，不算失效，不中止整輪。
-- **尚未有錄影的影片**：探測結果的 `live_status` 是 `is_upcoming`（排定的直播或首映）或 `is_live`（直播中）時，探測後立即跳過（log `[WAIT]`），不取字幕、不下載音訊、不寫 `length`，保持 pending，等結束後的下一輪再處理。這類影片沒有字幕，音訊下載必定失敗（「Premieres in 31 hours」），時長也還不是影片的時長。只在探測這一處判斷，下游（`Budget.refuse`、`asr`）沒有直播分支。
-- **會員限定影片**：yt-dlp 的 stderr 出現 `ERROR: [youtube] …: This video is available to this channel's members` 或 `Join this channel to get access to members-only content` 時，是影片本身對我們帳號的性質，寫 `BLANK_SUMMARY`（log `[RESTRICTED]`），不每天重試。判斷集中在 `media.restricted`（規則表 `RESTRICTED`），探測、字幕下載、音訊下載三處都用它；只看 stderr 的 `ERROR:` 行，與 cookies 失效（`cookies_rejected`）分開，不中止整輪。探測失敗的 log 附上 yt-dlp 的 stderr。同一張表也收「上傳者未開放所在國家」（`ERROR: [youtube] …: The uploader has not made this video available in your country`，log 顯示 `not available in the runner's country`）：runner 的所在國家由 GitHub 決定，對本專案而言與會員牆同樣不會改變。探測（`--ignore-no-formats`）把它當警告，仍會列出字幕，所以有字幕的影片照常取字幕；只有需要下載音訊時才因這條規則留白。
-- 下載與 ASR 結束後，在同一行程以 `summarize.run(offline_only=True)` 摘要新逐字稿，archive 只寫一次。
-- **ASR 失敗的歸類**：只有條目本身的性質寫 `BLANK_SUMMARY`——沒有語音（`NoSpeech`）、會員限定或所在國家未開放的影片（`Restricted`，見上）、影片超過 ASR 時長上限（3 小時，`TooLong` 或已知時長）。音檔下載失敗、逾時、缺 faster-whisper、預算不足一律保持 pending。
-- **Podcast**（`www.xiaoyuzhoufm.com/episode/…`、`open.firstory.fm|me/story/…`；節目首頁、使用者頁不算）：`media.resolve_episode` 找音檔——小宇宙取頁面 `og:audio`（.m4a），時長取 `__NEXT_DATA__` 的 `duration`、退而取「N分钟」；Firstory 先讀頁面連到的節目 RSS（`feed.firstory.me/rss/user/…`），取網址含該集 id 的條目的 enclosure 與 `itunes:duration`；RSS 不存在、讀不到或沒有該集時，才用頁面裡的 mp3／m4a 網址，時長視為未知。**時長只取字面上就是時長的欄位**（`__NEXT_DATA__` 的 `duration`、`itunes:duration`），頁面上的 `HH:MM:SS` 是發布時間，不拿來當時長。音檔以 `net.save` 下載（與 `net.get` 同一套位址檢查，每一跳轉址與每條連線都重驗；上限 512 MB；整體時限是同長度 YouTube 下載的兩倍，最少 10 分鐘、最多 30 分鐘；不經 yt-dlp、不帶 cookies）。傳輸中斷或停滯（約 45 秒沒有資料）時，從已寫入的位元組以 `Range` 續傳，每次都從原始網址重新走一遍轉址；伺服器不理會 `Range`（回 200）就整個重來，不會把兩份內容接在一起；有進展的嘗試不計入「連續 8 次沒有進展就放棄」；被拒絕的狀態碼（403 等）改用瀏覽器指紋再試一次。失敗時 `[ASR-FAILED]` 寫出原因（`HTTP 403`、`timed out after 1410s (12.3 MB in …; last: …)`、`larger than 512 MB`、`refused: …`），再走同一套 Whisper 與同一份 ASR 預算；時長未知時以實際音訊長度計入預算。ASR 成功後，`length` 一律改寫為解碼出的實際音訊長度（YouTube 與 podcast 皆同；頁面或 RSS 的時長只是下載前的估計）。檔名 `{id}.zh.{偵測語言}.vtt`。單集頁讀得到但沒有可用音檔（頁面無音檔、頁面 404/410、音檔指向非公網位址）：寫 `BLANK_SUMMARY`，這是單集本身的性質。讀不到單集頁或節目 RSS（無回應、403、5xx 等，`EpisodeUnreachable`）、解析錯誤、下載或轉錄失敗、超過 ASR 時長上限：保持 pending，下一輪再試，次數不限、不做任何標記。沒有語音同樣寫 `BLANK_SUMMARY`。
+**流程**（每支 YouTube 影片）：探測 → 選字幕 → 下載字幕 → 沒有就 ASR → 同一行程摘要新逐字稿，archive 只寫一次。
+
+- **範圍**：只處理 YouTube 影片（`store.is_youtube`：網址含合格影片 id）；頻道頁、播放清單走 `fetch`。每次 yt-dlp 呼叫都經 `media.ytdlp`，網址由 id 重建為 `watch?v=ID`。
+- **開工前**：刪除 id 已不在 archive 的 `.vtt`；每個 id 只留排名最高的一個 `.vtt`（`store.prune_subtitles`，下載或 ASR 成功後也做一次）。條目依發布時間新到舊，每輪最多 400 個。
+- **探測**：`--dump-json` 一次。結果存為暫存 info JSON（系統暫存目錄、0700、用完即刪；可能含 session cookies，永不進 repo）。
+- **player client**：探測、字幕、音訊第一階都不指定 `player_client`、不覆寫 UA，交給 yt-dlp 的預設（隨 YouTube 變動而更新的部分）。
+- **選字幕**：不需機翻 > 人工 > 語言。`live_chat` 不是字幕；`zh-Hant-TW` 是地區，`zh-Hant-en` 才是二次機翻。語言碼來自遠端，經 `safe_lang` 才進檔名或 `--sub-langs`。檔名 `{id}.{原文語言}.{字幕語言}.vtt`。
+- **下載字幕**（`fetch_track`）：先以 `--load-info-json` 下載（省去第二次萃取）；失敗且不是「沒有這個語言」或 cookies 被拒時，用網址重新萃取再試一次（例如 PO token 過期）。
+- **改走 ASR** 的情況：沒有可用字幕、yt-dlp 回報「no subtitles for the requested languages」、兩次都拿到空字幕（log `[EMPTY]`）。
+- **音訊後備階梯**（`AUDIO_LADDER`）：串流網址萃取成功仍可能下載被拒（403），yt-dlp 不會自己換格式。依序試 `default`（yt-dlp 預設 client）→ `hls`（`web_safari` m3u8）→ `premerged`（格式 18，不需 PO token）→ `tv`。共用一個下載時限（剩不到 45 秒就不開始下一階）；成功的一階在本輪排到最前。提前結束：`Restricted`、cookies 被拒、逾時。成功時 log `[AUDIO] <名稱> worked after: …`，全失敗時 `[ASR-FAILED]` 列出每階的 `ERROR:` 行。
+- **ASR**：faster-whisper（CPU int8，`beam_size=1`、VAD）。預算以音訊秒數計，撞牆且剩不到 10 分鐘就收工；整輪時鐘上限 270 分鐘（job 在 340 分鐘被殺時什麼都不會 commit）。輸出 VTT 時，與前一個 cue 相同的 cue 併入前一個（Whisper 幻覺迴圈）。成功後 `length` 改寫為解碼出的實際長度。逾時殺整個行程群組並清半成品。
+
+**判定**（只看 stderr 的 `ERROR:` 行；stdout 是遠端資料）：
+
+| 情況 | 處理 |
+|---|---|
+| cookies 失效：`cookies are no longer valid`、`have been rotated`、`confirm you're not a bot` | log `[EXPIRED]`，中止整輪，`status.json` 記 `expired`。年齡限制、會員提示也會提 `--cookies`，不算 |
+| 會員限定、上傳者未開放所在國家（`RESTRICTED` 表，`media.restricted`） | `BLANK_SUMMARY`（log `[RESTRICTED]`），之後不重試。探測對地區封鎖只是警告，有字幕仍照取，只有要下載音訊時才留白 |
+| `live_status` 為 `is_upcoming`／`is_live` | 探測後即跳過（log `[WAIT]`），不寫 `length`，保持 pending。只在探測判斷，下游無直播分支 |
+| 連續 3 支影片（`AUDIO_DOWN_AFTER`）每一階都是 `Requested format is not available`／`The page needs to be reloaded`（`NoStreams`） | yt-dlp 的 JS challenge 解不開，只剩分鏡圖：本輪其餘 YouTube 影片不下載音訊、保持 pending，結尾留 `::warning::` 提示更新 `yt-dlp[default]`。字幕與 podcast 照常 |
+| 探測成功、音訊下載回報 `Video unavailable` | 不能證明影片已消失（地區、client 限制），依 C3 保持 pending |
+| ASR：沒有語音（`NoSpeech`）、`Restricted`、影片超過 3 小時（`TooLong`） | `BLANK_SUMMARY` |
+| ASR：下載失敗、逾時、缺 faster-whisper、預算或時鐘用完 | 保持 pending |
+
+- **Podcast**（`www.xiaoyuzhoufm.com/episode/…`、`open.firstory.fm|me/story/…`；節目首頁、使用者頁不算）：`media.resolve_episode` 找音檔——小宇宙取頁面 `og:audio`（.m4a），時長取 `__NEXT_DATA__` 的 `duration`、退而取「N分钟」；Firstory 先讀頁面連到的節目 RSS（`feed.firstory.me/rss/user/…`），取網址含該集 id 的條目的 enclosure 與 `itunes:duration`；RSS 不存在、讀不到或沒有該集時，才用頁面裡的 mp3／m4a 網址，時長視為未知。**時長只取字面上就是時長的欄位**（`__NEXT_DATA__` 的 `duration`、`itunes:duration`），頁面上的 `HH:MM:SS` 是發布時間，不拿來當時長。音檔以 `net.save` 下載（與 `net.get` 同一套位址檢查，每一跳轉址與每條連線都重驗；上限 512 MB；整體時限是同長度 YouTube 下載的兩倍，最少 10 分鐘、最多 30 分鐘；不經 yt-dlp、不帶 cookies）。傳輸中斷或停滯（約 45 秒沒有資料）時，從已寫入的位元組以 `Range` 續傳，每次都從原始網址重新走一遍轉址；伺服器不理會 `Range`（回 200）就整個重來，不會把兩份內容接在一起；中斷之後改用有上界的 `Range`（`bytes=a-b`），每段是中斷那條連線實際送達量的一半（64 KiB–8 MiB，再斷再減半），整段收完立刻要下一段、不等待，學到的分段大小在本輪記在該主機名下、下一個檔案直接沿用；有進展的嘗試不計入「連續 8 次沒有進展就放棄」；被拒絕的狀態碼（403 等）改用瀏覽器指紋再試一次。失敗時 `[ASR-FAILED]` 寫出原因（`HTTP 403`、`timed out after 1410s (12.3 MB in …; last: …)`、`larger than 512 MB`、`refused: …`），再走同一套 Whisper 與同一份 ASR 預算；時長未知時以實際音訊長度計入預算。ASR 成功後，`length` 一律改寫為解碼出的實際音訊長度（YouTube 與 podcast 皆同；頁面或 RSS 的時長只是下載前的估計）。檔名 `{id}.zh.{偵測語言}.vtt`。單集頁讀得到但沒有可用音檔（頁面無音檔、頁面 404/410、音檔指向非公網位址）：寫 `BLANK_SUMMARY`，這是單集本身的性質。讀不到單集頁或節目 RSS（無回應、403、5xx 等，`EpisodeUnreachable`）、解析錯誤、下載或轉錄失敗、超過 ASR 時長上限：保持 pending，下一輪再試，次數不限、不做任何標記。沒有語音同樣寫 `BLANK_SUMMARY`。
 
 ## 8. 安全
 
@@ -267,7 +279,7 @@ pip 未用雜湊驗證、間接依賴未釘版；服務映像只釘 tag 未釘 d
 
 環境變數（全部由 `store.Config.from_env` 讀取；數字格式錯誤時印出警告並用預設值）：
 - 路徑：`DATA_DIR`（預設 `data`）；`archive.json`、`subtitles/`、`status.json`、`inbox.json` 都在其下
-- 蒐集與摘要：`ARCHIVE_DAYS` `RSS_MAX_FEEDS` `MAX_ITEMS` `TIME_BUDGET_SECONDS` `TRANSLATE` `SUMMARY_RATIO` `SUMMARY_MAX` `FALLBACKS` `DEEPL_API_KEY`（程式預設：`MAX_ITEMS` 200、`RSS_MAX_FEEDS` 400）
+- 蒐集與摘要：`ARCHIVE_DAYS` `RSS_MAX_FEEDS` `SCRAPED_SOURCES` `MAX_ITEMS` `TIME_BUDGET_SECONDS` `TRANSLATE` `SUMMARY_RATIO` `SUMMARY_MAX` `FALLBACKS` `DEEPL_API_KEY`（程式預設：`MAX_ITEMS` 200、`RSS_MAX_FEEDS` 400）
 - 字幕：`COOKIES_PATH`（檔案不存在就不帶 cookies）`MAX_ASR_TOTAL_SECONDS`（預設 28800）`MAX_TRANSCRIBE`（預設 40）`MAX_ASR_DURATION_SECONDS`（預設 10800）`WHISPER_MODEL` `WHISPER_COMPUTE_TYPE`；每輪最多看 400 個條目（`media.Limits`），依發布時間新到舊
 - OPML secret（`FOLLOW_OPML_B64*`）不進 `Config`，由 `collect.opml_from_env` 直接在記憶體解開
 
@@ -334,15 +346,16 @@ Secrets：`FOLLOW_OPML_B64`（必要時加 `_2`…`_5`）、`DEEPL_API_KEY`、`Y
 | C26 | channel names and ids taken from pages are allowlist-validated before building a url | a remote string becomes an arbitrary url | `check_telegram_channels`、`check_youtube_channel_urls`、`check_bridge_whitelist` |
 | C27 | the inbox accepts only safe urls within retention; collect only reads it | conflicts with the reader writing mid-run; javascript: and similar urls get stored | `check_inbox` |
 | C28 | the OPML is decoded in memory only | the subscription list lands on disk and gets committed | `check_opml_secret` |
-| C29 | default feeds are collected with the OPML, once, and the OPML entry wins | a default doubles a subscription or overrides its title and category | `check_default_feeds` |
+| C29 | scraped sources are off by default; The Paper takes only the article's own body and reads dates as Beijing time | unintended scraping; a summary mixes in another article | `check_scraped_sources_switch`、`check_bestblogs`、`check_thepaper_body`、`check_thepaper_pending_refetched`、`check_thepaper_dates` |
 | C30 | the language header is sent; the browser fingerprint carries only its own headers | the wrong language version is served; a mismatched fingerprint gets blocked | `check_accept_language` |
 | C31 | the CLI subcommands work; --dry-run writes nothing | maintenance commands are found broken only when needed | `check_cli_subcommands` |
 | C32 | CONTRACTS and the checks agree; every mutation still applies | rules sit in a table with no check behind them; mutations rot into no-ops unnoticed | `check_contracts` |
 | C33 | code comments carry no development history | "what happens if this is written otherwise" is crowded out by the story of how it got this way | `check_doc_history` |
 | C34 | workflows: permissions {}, persist-credentials false, actions pinned by SHA, one concurrency group | the token leaks, or concurrent writes overwrite each other | not automated: selftest does not parse the workflow yml (ARCHITECTURE.md §10) |
 | C35 | only YouTube *videos* (a valid 11-character id from store.youtube_video_id) reach media and the youtube route; the url yt-dlp gets is always rebuilt from the id (youtube_watch_url) and names that one video; stored video urls carry no list, index, si or t parameters | a ?list= url makes the probe walk the whole playlist until it times out, every day; one video shows up several times under different share parameters | `check_youtube_video_url`、`check_security` |
-| C36 | a YouTube audio download that fails is tried again by the next way in AUDIO_LADDER (yt-dlp's own client choice first, no user agent override), within one timeout; only a closed video (members only, geo-blocked), refused cookies or a timeout end it early; failures name each attempt's ERROR line | one refused player client (HTTP 403) leaves every video without captions pending for good, and upgrading yt-dlp changes nothing because its client choice is overridden; the log shows a country list instead of the reason | `check_audio_ladder` |
-| C37 | podcast audio downloads resume a broken or stalled transfer from the bytes on disk (a server ignoring Range starts the file over), retry a refused plain client once with the browser fingerprint, and report why they failed; past the run time limit no further ASR job starts | a long episode on a slow CDN never arrives in one piece and stays pending for good, with a log line that fits every cause; slow downloads run the job into its timeout and nothing is committed | `check_download_resume`、`check_audio_ladder` |
+| C36 | a YouTube audio download that fails is tried again by the next way in AUDIO_LADDER (yt-dlp's own client choice first, no user agent override), within one timeout, and the way that worked goes first for the rest of the run; only a closed video (members only, geo-blocked), refused cookies or a timeout end it early; failures name each attempt's ERROR line | one refused player client (HTTP 403) leaves every video without captions pending for good, and upgrading yt-dlp changes nothing because its client choice is overridden; the log shows a country list instead of the reason | `check_audio_ladder` |
+| C37 | podcast audio downloads resume a broken or stalled transfer from the bytes on disk (a server ignoring Range starts the file over), in bounded ranges of half what the broken connection delivered, remembered per host, retry a refused plain client once with the browser fingerprint, and report why they failed; past the run time limit no further ASR job starts | a long episode never arrives in one piece, or crawls at one stall per MiB on a CDN that goes silent after a fixed amount per connection, and stays pending for good, with a log line that fits every cause; slow downloads run the job into its timeout and nothing is committed | `check_download_resume`、`check_audio_ladder` |
+| C38 | when every audio way finds no streams (Requested format is not available / The page needs to be reloaded) for AUDIO_DOWN_AFTER videos in a row, the rest of the run downloads no YouTube audio, keeps those items pending and leaves a ::warning:: to update yt-dlp; podcasts are unaffected | an outdated JS challenge solver costs four extractions per video for every pending video, every day, raising the bot score, while the log looks like a series of per-video failures | `check_audio_down` |
 
 ### 11.1 檢查本身怎麼被驗證
 
@@ -361,6 +374,8 @@ Secrets：`FOLLOW_OPML_B64`（必要時加 `_2`…`_5`）、`DEEPL_API_KEY`、`Y
 | 主題 | 過程 |
 |---|---|
 | Firstory 時長 | 以頁面文字裡第一個 `HH:MM:SS` 當時長，抓到的是發布時間（下午兩點發布 → 51788 秒，約實際的 20 倍）；而頁面通常有音檔網址，RSS 的 `itunes:duration` 從未被讀。凌晨三點後發布的單集因此全部超過 3 小時上限，永遠不轉錄。改為只取字面上就是時長的欄位，並在 ASR 後寫入實測長度。新增 podcast 來源時，時長不要從版面文字猜。 |
+| 字幕回空 | 探測與字幕固定 `player_client=web`＋固定 UA，YouTube 對其字幕請求回 200 空內容，yt-dlp 報 `Did not get any data blocks`，影片每天記 `[FAILED]`、從不改走 ASR。改為不指定 client（與音訊第一階相同），空字幕視同沒有字幕而改走 ASR。固定某個 client 等於把它凍結在寫下當時；YouTube 最先拒絕的正是被固定的那個。 |
+| JS challenge 失效 | YouTube 換了 player，yt-dlp 2026.10.26 附的 challenge 解法失效，每支影片只剩分鏡圖：音訊四階全報 `Requested format is not available`／`The page needs to be reloaded`，每天每支待轉錄影片白付四次萃取，log 看起來像一連串個別影片的失敗。升級到 2026.11.23（`yt-dlp-ejs` 0.8.0），並加上「連續 3 支都無串流就停止本輪音訊下載」與 `::warning::`。所有影片同時以同一句失敗時，先懷疑工具版本，不是影片。 |
 | 首映前的影片 | 只認 `is_live`，`is_upcoming` 的影片沒有字幕、音訊下載必定失敗，每天耗掉約 9 次 YouTube 請求。在探測處統一判斷「尚未有錄影」後，下游的直播分支一併刪除：同一個判斷散在多處時，新增一種狀態只會補到其中一處。 |
 | 檢查的有效性 | 契約表建立後第一次跑突變測試，13 筆中有 2 筆沒被抓到：`check_child_env` 測的 secret 名稱都不在白名單內，所以白名單之後的第二道過濾（擋 `DENO_AUTH_TOKENS` 這類名稱合法、內容是 secret 的變數）拿掉也照樣通過；`textproc.garbled` 的 U+FFFD 規則拿掉後，QC 測試仍由別的規則判成亂碼而通過，攝入端的那條規則沒有任何測試。兩者補上直接的斷言後都會被抓到。測試通過不代表它測到了想測的那一條分支。 |
 | YouTube 播放清單網址 | 閱讀器送進來的 `youtu.be/ID?list=…` 原樣交給 yt-dlp，探測展開整個播放清單、逐支印出「Only images are available」，90 秒逾時後失敗，每天重來。改為只把合格影片 id 認作 YouTube 影片，yt-dlp 的網址一律由 id 重建，存下的網址也去掉播放清單參數。外部字串交給子行程前，要從驗證過的欄位重建，而不是只確認它「看起來像」。 |
@@ -368,3 +383,5 @@ Secrets：`FOLLOW_OPML_B64`（必要時加 `_2`…`_5`）、`DEEPL_API_KEY`、`Y
 | YouTube 音訊 403 | 音訊下載固定指定 `player_client=tv,web_safari,default` 並覆寫 `--user-agent`。從 log 判斷，格式來自清單中第一個 client（tv；yt-dlp 2026.10.26 對登入狀態的預設已不含它），串流網址萃取成功、下載時回 `HTTP Error 403`；更新 cookies、升級 yt-dlp 都沒有差別，因為被拒的不是帳號，而升級改進的預設 client 選擇正好被這個參數蓋掉。改為階梯：先用 yt-dlp 的預設，失敗再換協定（HLS）、換格式（18）、換 client，並拿掉音訊下載的 UA 覆寫。寫死在參數裡的 client 清單會停在當時可用的那一組；要指定時，把它放在預設之後當後備，而不是取代預設。 |
 | 失敗訊息的尾巴 | 失敗 log 取輸出的最後 1500 字元。區域限制的錯誤訊息後面跟著兩百多個國家名稱，原因本身被擠出視窗，log 只剩國家清單。改為只取 stderr 的 `ERROR:` 行、每行截斷。截尾巴假設重點在最後，錯誤訊息的重點在開頭。 |
 | Podcast 音檔下載 | 一次請求、失敗重來一次、每次從零開始，失敗訊息是「failed, timed out or too large」。47 分鐘的單集從 runner 連到對岸的 CDN，中途斷線就前功盡棄，而 log 分不出是被拒、太慢還是斷線，也就無從決定對策。改為續傳並回報原因。同時加上整輪時鐘上限，因為放寬下載時限後，連續幾集慢速下載足以讓 job 撞上 340 分鐘而整輪不 commit。 |
+| 每條連線只送 1 MiB 的 CDN | 續傳上線後的第一輪：小宇宙的 CDN（`media.xyzcdn.net`）每條連線送出剛好 1,048,576 位元組後就不再送資料。開放式的 `Range: bytes=N-` 每次都要等停滯偵測（約 52 秒）才切斷重連，53 MB 的單集在 1670 秒內只拿到 32 MB（每 MiB 一次停滯）。改為中斷後以有上界的分段請求，每段小於對方肯送的量，請求自然結束、不必等停滯。續傳只解決「斷線後不必重來」；對方若按連線配額供應，要讓每個請求都落在配額之內。log 裡「剛好 2 的次方」的位元組數是對方的規則，不是網路狀況。 |
+| 音訊階梯的順序 | 階梯上線後的第一輪：`default` 403、`hls` 沒有格式、`premerged`（格式 18）成功。每支影片都照表從頭試，會各多付兩次必然失敗的萃取。改為行程內記住成功的來源、排到最前面；表的順序維持「yt-dlp 的預設優先」，哪一種可用由當輪的結果決定，不寫死在表裡。 |
