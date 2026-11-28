@@ -1968,8 +1968,25 @@ def check_audio_down():
             ds.asr(item, None, 60, a, budget, Path(d), n, fetch)
             eq((calls, n["deferred"], "summary" in item), ([], 1, False), "audio down: no download, kept pending")
             got = []
-            ds.asr(item, None, 60, a, budget, Path(d), n, lambda d, t: got.append(1) or (_ for _ in ()).throw(RuntimeError("x")),
-                   is_podcast=True)
+
+            # This contract checks that Podcast bypasses the YouTube audio-down
+            # guard and reaches its fetch callback. Do not require faster-whisper
+            # to be installed: transcribe imports it before calling fetch.
+            real_transcribe = ds.transcribe
+
+            def fake_transcribe(fetch, out_dir, item_id, orig, a, duration):
+                return fetch(out_dir, 60), 0
+
+            ds.transcribe = fake_transcribe
+            try:
+                ds.asr(
+                    item, None, 60, a, budget, Path(d), n,
+                    lambda d, t: got.append(1) or (_ for _ in ()).throw(RuntimeError("x")),
+                    is_podcast=True,
+                )
+            finally:
+                ds.transcribe = real_transcribe
+
             eq(got, [1], "podcasts still downloaded")
     finally:
         ds.run_cmd = real
